@@ -31,6 +31,7 @@ DEFAULTS = {
     "match_tolerance_min": 10,
     "dry_run": True,
     "overwrite_cost": False,
+    "zero_is_empty": True,
     "log_level": "info",
 }
 KEEPALIVE_EVERY_S = 3600

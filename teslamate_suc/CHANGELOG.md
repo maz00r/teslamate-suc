@@ -1,5 +1,9 @@
 # Zmiany
 
+## 0.2.4
+- `zero_is_empty` (domyślnie włączone): cudzy koszt 0,00 przy płatnej fakturze traktujemy jak pusty.
+  TeslaMate wpisuje 0 dla geofence'a ze stawką 0 (np. „Tesla Ząbki”). Inne niezerowe koszty pozostają chronione.
+
 ## 0.2.3
 - Plan pokazuje przy pominiętych ładowaniach geofence z TeslaMate (nazwa i stawka) oraz `free_supercharging`, czyli skąd wziął się cudzy koszt.
 

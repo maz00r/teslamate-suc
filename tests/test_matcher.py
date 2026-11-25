@@ -204,6 +204,9 @@ class TestSplitAndDecide(unittest.TestCase):
         self.assertEqual(d(D("10"), D("8"), None, True)[0], "write")
         self.assertEqual(d(D("10000"), None, None, True)[0], "skip")
         self.assertEqual(d(D("-1"), None, None, True)[0], "skip")
+        self.assertEqual(d(D("10"), D("0"), None, False), ("write", matcher.REASON_ZERO))  # zero_is_empty
+        self.assertEqual(d(D("10"), D("0"), None, False, zero_is_empty=False)[0], "skip")
+        self.assertEqual(d(D("0"), D("0"), None, False)[0], "none")
         self.assertEqual(d(D("0.00"), None, None, False)[0], "write")  # free → 0.00
 
 

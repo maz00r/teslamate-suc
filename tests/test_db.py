@@ -298,6 +298,16 @@ class TestSync(Base):
         n = self.conn.execute("SELECT count(*) FROM suc.allocation WHERE charging_process_id=%s", (pid,)).fetchone()[0]
         self.assertEqual(n, 2)
 
+    def test_zero_from_geofence_is_filled(self):
+        self.conn.execute("UPDATE charging_processes SET cost = 0 WHERE id=%s", (self.pids["900052000"],))
+        self.opts["dry_run"] = False
+        rep = self.syncer.run(dry_run=False)
+        self.assertEqual(rep["written"], 6)
+        self.assertEqual(self.costs()["900052000"], D("70.21"))
+        before = self.conn.execute("SELECT cost_before FROM suc.write_log WHERE charging_process_id=%s",
+                                   (self.pids["900052000"],)).fetchone()[0]
+        self.assertEqual(before, D("0.00"))  # undo restores 0
+
     def test_stale_cost_reported(self):  # review #2
         self.opts["dry_run"] = False
         self.syncer.run(dry_run=False)

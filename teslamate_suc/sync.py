@@ -141,7 +141,8 @@ class Syncer:
                 if pid in excluded and not overwrite:
                     action, reason = "skip", "zapis cofnięty ręcznie — wykluczone z synchronizacji"
                 else:
-                    action, reason = matcher.decide(target, p.cost, ours.get(pid), overwrite)
+                    action, reason = matcher.decide(target, p.cost, ours.get(pid), overwrite,
+                                                    bool(o.get("zero_is_empty", True)))
                 row = {"process": pid, "start": _iso(p.start), "site": sites.get(pid),
                        "kwh_added": _f(p.energy_added), "cost_before": _f(p.cost), "cost_after": _f(target),
                        "action": action, "reason": reason, "geofence": p.geofence,

@@ -21,6 +21,7 @@ from parse import CENT, Invoice
 
 MAX_COST = Decimal("9999.99")  # charging_processes.cost is numeric(6,2)
 REASON_OVERWRITE = "nadpisanie (overwrite_cost)"
+REASON_ZERO = "koszt 0,00 przy płatnej fakturze (zero_is_empty)"
 
 
 @dataclass(frozen=True)
@@ -193,9 +194,12 @@ def costs_by_process(allocs: list[Allocation]) -> dict[int, Decimal]:
 # --------------------------------------------------------------------------- write decision
 
 
-def decide(target: Decimal, current: Decimal | None, ours: Decimal | None, overwrite: bool) -> tuple[str, str]:
+def decide(target: Decimal, current: Decimal | None, ours: Decimal | None, overwrite: bool,
+           zero_is_empty: bool = True) -> tuple[str, str]:
     """Returns (action, reason). action ∈ write | none | skip.
-    `ours` = what we wrote earlier (proof the cost belongs to us)."""
+    `ours` = what we wrote earlier (proof the cost belongs to us).
+    `zero_is_empty`: someone else's 0.00 with a paid invoice is treated as empty — TeslaMate writes 0 for a geofence
+    with a zero rate (e.g. „Tesla Ząbki”), and that is not real information about the cost."""
     if target > MAX_COST or target < 0:
         return "skip", "kwota poza zakresem (ujemna albo > 9999.99)"
     if current is not None and current == target:
@@ -204,6 +208,8 @@ def decide(target: Decimal, current: Decimal | None, ours: Decimal | None, overw
         return "write", "koszt pusty"
     if ours is not None and current == ours:
         return "write", "korekta faktury"
+    if zero_is_empty and current == 0 and target > 0:
+        return "write", REASON_ZERO
     if overwrite:
         return "write", REASON_OVERWRITE
     return "skip", "koszt ustawiony przez kogoś innego"
