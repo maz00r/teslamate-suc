@@ -1,5 +1,15 @@
 # Zmiany
 
+## 0.2.2 — poprawki po niezależnym przeglądzie
+- **Krawędź okna:** zapis tylko dla grup, które dotykają właściwego zakresu. Grupa ucięta przez margines
+  (np. sesja podzielona o północy) nie nadpisuje już poprawnego kosztu połową kwoty.
+- Nasz koszt, który stracił dopasowanie, jest raportowany (`stale`, sensor `suc_stale`), a nie zostawiany po cichu.
+- Cofnięcie jest trwałe: proces trafia do `suc.cost_excluded`. Cofnięcie korekty przywraca „własność” poprzedniej wartości.
+- Cofanie jest zablokowane przy `dry_run`.
+- `overwrite_cost` wyłącza kontrolę współbieżności tylko dla świadomego nadpisania cudzego kosztu.
+- Ujemne kwoty: poprawny podział i odrzucanie ujemnego `cost`.
+- Zmiana czasów, VIN-u lub lokalizacji faktury też aktualizuje `suc.invoice`. Data „do” w panelu obejmuje cały dzień.
+
 ## 0.2.1
 - Obraz: dołożona `libpq`, bez niej psycopg się nie importował (0.2.0 nie startowała).
 

@@ -115,7 +115,7 @@ function renderReport(r) {
   const plan = r.plan || [];
   const w = plan.filter(x => x.action === 'write').length;
   let h = `<p>${r.dry_run ? '<b>DRY-RUN</b> — nic nie zapisano.' : '<b>ZAPIS</b>'} Zakres ${esc(r.range[0].slice(0,10))} → ${esc(r.range[1].slice(0,10))}. Pobrano ${r.fetched} sesji, grupy: ${esc(JSON.stringify(r.groups))}.<br>
-    ${r.dry_run ? 'Do zapisu' : 'Zapisano'}: <b>${r.dry_run ? w : r.written}</b>, pominięte: ${r.skipped}, niedopasowane faktury: ${r.unmatched.length}, do przeglądu: ${r.review.length}, ładowania Tesla bez faktury: ${r.lonely_tesla.length}.
+    ${r.dry_run ? 'Do zapisu' : 'Zapisano'}: <b>${r.dry_run ? w : r.written}</b>, pominięte: ${r.skipped}, niedopasowane faktury: ${r.unmatched.length}, do przeglądu: ${r.review.length}, ładowania Tesla bez faktury: ${r.lonely_tesla.length}${(r.stale||[]).length ? `, <span class="bad">nasze koszty bez dopasowania: ${r.stale.length}</span>` : ''}.
     ${r.error ? `<br><span class="bad">Błąd: ${esc(r.error)}</span>` : ''}</p>`;
   const rows = plan.filter(x => x.action !== 'none');
   if (rows.length) h += `<details open><summary>Zmiany kosztów (${rows.length})</summary><pre>${rows.map(x =>
@@ -123,6 +123,7 @@ function renderReport(r) {
   const same = plan.length - rows.length;
   if (same) h += `<p class="muted">${same} ładowań już ma poprawny koszt.</p>`;
   if (r.unmatched.length) h += `<details><summary>Faktury bez ładowania w TeslaMate (${r.unmatched.length})</summary><pre>${r.unmatched.map(x => `${esc(x.start.slice(0,16))}  ${esc(x.site)}  ${money(x.total)}  sesja ${esc(x.session)}`).join('\n')}</pre></details>`;
+  if ((r.stale||[]).length) h += `<details open><summary class="bad">Koszt wpisany przez SuC, ale faktura już nie pasuje (${r.stale.length})</summary><pre>${r.stale.map(x => `${esc(x.start.slice(0,16))}  #${x.process}  ${money(x.cost)}`).join('\n')}</pre><p class="muted">Sprawdź w TeslaMate; cofnąć możesz w „Zapisy i cofanie”.</p></details>`;
   if (r.review.length) h += `<details open><summary class="bad">Do przeglądu — niejednoznaczne (${r.review.length})</summary><pre>${esc(JSON.stringify(r.review, null, 1))}</pre></details>`;
   if (r.lonely_tesla.length) h += `<details><summary>Ładowania Tesla (DC) bez faktury (${r.lonely_tesla.length})</summary><pre>${r.lonely_tesla.map(x => `${esc(x.start.slice(0,16))}  #${x.process}  ${x.kwh} kWh`).join('\n')}</pre></details>`;
   $('report').innerHTML = h;
@@ -132,7 +133,7 @@ async function loadBatches() {
     const b = await call('GET', 'api/batches');
     $('batches').innerHTML = b.length ? b.map(x => `${esc(x.at.slice(0,16))} — ${x.changes} zmian ${x.undone ? '(cofnięte)' : `<button class="sec" data-b="${esc(x.batch_id)}">Cofnij</button>`}`).join('<br>') : 'Brak zapisów.';
     document.querySelectorAll('[data-b]').forEach(el => el.onclick = e => act(e.target, async () => {
-      if (!confirm('Przywrócić koszty sprzed tego zapisu? Pozycje zmienione później zostaną pominięte.')) return;
+      if (!confirm('Przywrócić koszty sprzed tego zapisu? Pozycje zmienione później zostaną pominięte, a cofnięte ładowania nie będą już synchronizowane.')) return;
       const r = await call('POST', 'api/undo', {batch_id: el.dataset.b}); alert(`Przywrócono ${r.restored}, pominięto ${r.skipped_changed_since}.`); loadBatches();
     }));
   } catch (e) { $('batches').textContent = e.message; }

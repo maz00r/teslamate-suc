@@ -190,6 +190,9 @@ class TestSplitAndDecide(unittest.TestCase):
         self.assertEqual(sum(parts), D("10.00"))
         self.assertEqual(sorted(parts), [D("3.33"), D("3.33"), D("3.34")])
         self.assertEqual(matcher.split_exact(D("5.00"), [D(0), D(0)]), [D("2.50"), D("2.50")])
+        neg = matcher.split_exact(D("-1.00"), [D(1), D(1), D(1)])  # review #5
+        self.assertEqual(sum(neg), D("-1.00"))
+        self.assertEqual(sorted(neg), [D("-0.34"), D("-0.33"), D("-0.33")])
 
     def test_decide(self):
         d = matcher.decide
@@ -200,6 +203,7 @@ class TestSplitAndDecide(unittest.TestCase):
         self.assertEqual(d(D("10"), D("8"), D("7"), False)[0], "skip")  # someone changed what we wrote
         self.assertEqual(d(D("10"), D("8"), None, True)[0], "write")
         self.assertEqual(d(D("10000"), None, None, True)[0], "skip")
+        self.assertEqual(d(D("-1"), None, None, True)[0], "skip")
         self.assertEqual(d(D("0.00"), None, None, False)[0], "write")  # free → 0.00
 
 

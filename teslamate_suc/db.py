@@ -83,6 +83,14 @@ CREATE TABLE IF NOT EXISTS suc.cost_written (
     written_at           timestamp NOT NULL
 );
 
+-- Processes whose write was undone by hand: sync skips them (otherwise it would write the same value again
+-- 6 h later). Back into sync: DELETE FROM suc.cost_excluded WHERE charging_process_id = …
+CREATE TABLE IF NOT EXISTS suc.cost_excluded (
+    charging_process_id  integer PRIMARY KEY,
+    batch_id             uuid NOT NULL,
+    excluded_at          timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')
+);
+
 -- Undo log: every cost change, written BEFORE the UPDATE, in the same transaction.
 CREATE TABLE IF NOT EXISTS suc.write_log (
     id                   bigserial PRIMARY KEY,
@@ -171,8 +179,11 @@ def upsert_invoices(conn, invoices: list[Invoice]) -> dict:
                     paid = excluded.paid, pricing_types = excluded.pricing_types, rates = excluded.rates,
                     invoice_ids = excluded.invoice_ids, fees_hash = excluded.fees_hash, raw = excluded.raw,
                     updated_at = now() AT TIME ZONE 'UTC'
-                  WHERE suc.invoice.fees_hash IS DISTINCT FROM excluded.fees_hash
-                     OR suc.invoice.paid IS DISTINCT FROM excluded.paid
+                  WHERE (suc.invoice.fees_hash, suc.invoice.paid, suc.invoice.vin, suc.invoice.site_name,
+                         suc.invoice.start_utc, suc.invoice.stop_utc, suc.invoice.unlatch_utc, suc.invoice.invoice_ids)
+                        IS DISTINCT FROM
+                        (excluded.fees_hash, excluded.paid, excluded.vin, excluded.site_name,
+                         excluded.start_utc, excluded.stop_utc, excluded.unlatch_utc, excluded.invoice_ids)
                 RETURNING (xmax = 0) AS inserted
                 """,
                 (i.session_id, i.vin, i.site_name, i.country, i.start, i.stop, i.unlatch, i.grid_kwh,
@@ -274,7 +285,10 @@ def write_cost(conn, *, batch_id: uuid.UUID, process_id: int, expected: Decimal 
 
 
 def undo_batch(conn, batch_id: str) -> dict:
-    """Restores cost_before, but only where the cost is still what we wrote (nobody changed it since)."""
+    """Restores cost_before, but only where the cost is still what we wrote (nobody changed it since).
+    After the undo the process goes to suc.cost_excluded, otherwise sync would write the same value again.
+    If cost_before was itself our earlier write (undoing a correction), cost_written goes back to that
+    value, so ownership is not lost."""
     restored, skipped = 0, 0
     with conn.transaction():
         rows = conn.execute(
@@ -282,16 +296,32 @@ def undo_batch(conn, batch_id: str) -> dict:
             "FROM suc.write_log WHERE batch_id = %s AND undone_at IS NULL "
             "ORDER BY charging_process_id, id ASC", (batch_id,)).fetchall()
         for r in rows:
+            pid = r["charging_process_id"]
             cur = conn.execute("UPDATE charging_processes SET cost = %s WHERE id = %s AND cost IS NOT DISTINCT FROM %s",
-                               (r["cost_before"], r["charging_process_id"], r["cost_after"]))
-            if cur.rowcount == 1:
-                restored += 1
-                conn.execute("DELETE FROM suc.cost_written WHERE charging_process_id = %s AND batch_id = %s",
-                             (r["charging_process_id"], batch_id))
-            else:
+                               (r["cost_before"], pid, r["cost_after"]))
+            if cur.rowcount != 1:
                 skipped += 1
+                continue
+            restored += 1
+            prev = conn.execute(
+                "SELECT batch_id, cost_after, at FROM suc.write_log WHERE charging_process_id = %s AND id < %s "
+                "AND undone_at IS NULL ORDER BY id DESC LIMIT 1", (pid, r["id"])).fetchone()
+            if prev is not None and r["cost_before"] is not None and prev["cost_after"] == r["cost_before"]:
+                conn.execute("UPDATE suc.cost_written SET cost = %s, batch_id = %s, written_at = %s "
+                             "WHERE charging_process_id = %s", (prev["cost_after"], prev["batch_id"], prev["at"], pid))
+            else:
+                conn.execute("DELETE FROM suc.cost_written WHERE charging_process_id = %s", (pid,))
+            conn.execute("INSERT INTO suc.cost_excluded (charging_process_id, batch_id) VALUES (%s, %s) "
+                         "ON CONFLICT (charging_process_id) DO UPDATE SET batch_id = excluded.batch_id, "
+                         "excluded_at = now() AT TIME ZONE 'UTC'", (pid, batch_id))
         conn.execute("UPDATE suc.write_log SET undone_at = now() AT TIME ZONE 'UTC' WHERE batch_id = %s", (batch_id,))
     return {"batch_id": batch_id, "restored": restored, "skipped_changed_since": skipped}
+
+
+def excluded_processes(conn, process_ids: list[int]) -> set[int]:
+    rows = conn.execute("SELECT charging_process_id FROM suc.cost_excluded WHERE charging_process_id = ANY(%s)",
+                        (process_ids,)).fetchall()
+    return {r["charging_process_id"] for r in rows}
 
 
 def last_batches(conn, limit: int = 5) -> list[dict]:
@@ -304,8 +334,9 @@ def cleanup_orphans(conn) -> int:
     with conn.transaction():
         n = conn.execute("DELETE FROM suc.allocation a WHERE NOT EXISTS "
                          "(SELECT 1 FROM charging_processes cp WHERE cp.id = a.charging_process_id)").rowcount
-        n += conn.execute("DELETE FROM suc.cost_written w WHERE NOT EXISTS "
-                          "(SELECT 1 FROM charging_processes cp WHERE cp.id = w.charging_process_id)").rowcount
+        for t in ("cost_written", "cost_excluded"):
+            n += conn.execute(f"DELETE FROM suc.{t} w WHERE NOT EXISTS "
+                              "(SELECT 1 FROM charging_processes cp WHERE cp.id = w.charging_process_id)").rowcount
     return n
 
 

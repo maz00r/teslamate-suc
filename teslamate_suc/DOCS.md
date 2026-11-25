@@ -33,6 +33,9 @@ Domyślnie działa `dry_run: true`: panel pokazuje, co zostałoby zapisane, a Te
    (te same dane co TeslaMate). W panelu kliknij „Podgląd (dry-run)” z zakresem dat obejmującym całą historię,
    przejrzyj plan, zrób backup HA, wyłącz `dry_run` i kliknij „Zapisz koszty”.
 
+Cofnięty zapis wyklucza ładowanie z synchronizacji. Żeby je przywrócić:
+`DELETE FROM suc.cost_excluded WHERE charging_process_id = <id>;`
+
 ## Bezpieczeństwo
 
 - Panel jest dostępny tylko przez Ingress HA. Inne adresy dostają 403.

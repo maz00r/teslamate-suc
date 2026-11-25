@@ -255,6 +255,86 @@ class TestSync(Base):
         self.assertEqual(self.costs()["free"], D("0.00"))
         self.assertEqual(rep["groups"].get("N:1"), 1)
 
+    def _tariff_split(self):
+        all_s = {str(s["sessionId"]): s for s in load()}
+        a, b = all_s["900033000"], all_s["900034000"]
+        self.api.sessions = [a, b]
+        import parse
+        ia, ib = parse.parse_session(a), parse.parse_session(b)
+        pid = self.conn.execute("INSERT INTO charging_processes (start_date, end_date, charge_energy_added, car_id) "
+                                "VALUES (%s,%s,58.0,1) RETURNING id", (ia.start, ib.stop)).fetchone()[0]
+        self.conn.execute("INSERT INTO charges (date, charge_energy_added, charger_power, fast_charger_present, "
+                          "ideal_battery_range_km, charging_process_id) VALUES (%s,1,150,true,300,%s)", (ia.start, pid))
+        return ia, ib, pid
+
+    def test_window_edge_does_not_cut_group(self):  # review #1
+        ia, ib, pid = self._tariff_split()
+        self.opts["dry_run"] = False
+        self.syncer.run(start=utc("2024-07-01T00:00:00+00:00"), end=self.now, dry_run=False)
+        get = lambda: self.conn.execute("SELECT cost FROM charging_processes WHERE id=%s", (pid,)).fetchone()[0]
+        self.assertEqual(get(), D("86.06"))
+        self.api.sessions = []  # later passes: Tesla returns nothing new, the invoices are already in the database
+        # (a) the core starts between the two invoices: the first is still in the padding, so the group is whole
+        start_a = (ia.end + timedelta(minutes=1)).replace(tzinfo=timezone.utc)
+        rep = self.syncer.run(start=start_a, end=self.now, dry_run=False)
+        self.assertEqual(get(), D("86.06"))
+        self.assertEqual(rep["written"], 0)
+        # (b) the padding cuts the group off (the first invoice is not loaded): the group is outside the core, untouched
+        start_b = (ia.end + timedelta(days=1, minutes=1)).replace(tzinfo=timezone.utc)
+        rep = self.syncer.run(start=start_b, end=self.now, dry_run=False)
+        self.assertEqual(get(), D("86.06"))
+        n = self.conn.execute("SELECT count(*) FROM suc.allocation WHERE charging_process_id=%s", (pid,)).fetchone()[0]
+        self.assertEqual(n, 2)
+
+    def test_stale_cost_reported(self):  # review #2
+        self.opts["dry_run"] = False
+        self.syncer.run(dry_run=False)
+        pid = self.pids["900053000"]
+        self.conn.execute("UPDATE charging_processes SET start_date = start_date + interval '3 hours', "
+                          "end_date = end_date + interval '3 hours' WHERE id=%s", (pid,))
+        rep = self.syncer.run(dry_run=False)
+        self.assertEqual([x["process"] for x in rep["stale"]], [pid])
+        self.assertEqual(self.costs()["900053000"], D("65.36"))  # not undone on its own
+
+    def test_undo_sticks_and_restores_ownership(self):  # review #3
+        self.opts["dry_run"] = False
+        rep1 = self.syncer.run(dry_run=False)
+        for s in self.sessions:  # correction
+            for f in s["fees"]:
+                if f["feeType"] == "CHARGING":
+                    f["totalDue"] = round(f["totalDue"] + 1, 2)
+        rep2 = self.syncer.run(dry_run=False)
+        self.assertEqual(self.costs()["900053000"], D("66.36"))
+        conn = self.db.connect(self.opts)
+        self.db.undo_batch(conn, rep2["batch_id"])
+        conn.close()
+        self.assertEqual(self.costs()["900053000"], D("65.36"))
+        own = self.conn.execute("SELECT cost, batch_id::text FROM suc.cost_written WHERE charging_process_id=%s",
+                                (self.pids["900053000"],)).fetchone()
+        self.assertEqual(own, (D("65.36"), rep1["batch_id"]))  # ownership back to batch 1
+        rep3 = self.syncer.run(dry_run=False)  # the undo sticks: sync does not write 66.36 again
+        self.assertEqual(rep3["written"], 0)
+        self.assertEqual(self.costs()["900053000"], D("65.36"))
+        self.assertTrue(all("cofnięty" in r["reason"] for r in rep3["plan"] if r["action"] == "skip"))
+        conn = self.db.connect(self.opts)
+        self.db.undo_batch(conn, rep1["batch_id"])
+        conn.close()
+        self.assertIsNone(self.costs()["900053000"])
+        self.assertEqual(self.syncer.run(dry_run=False)["written"], 0)
+
+    def test_undo_refused_in_dry_run(self):  # review #4
+        import panel
+        app = panel.App(opts=self.opts, auth=None, api=None, usage=None, data_dir=self.tmp.name, syncer=self.syncer)
+        with self.assertRaisesRegex(ValueError, "dry_run"):
+            app.undo("00000000-0000-0000-0000-000000000000")
+
+    def test_invoice_time_change_is_stored(self):  # review #7
+        self.syncer.run()
+        s = self.sessions[0]
+        s["chargeStopDateTime"] = s["chargeStopDateTime"].replace(":54:42", ":55:42")
+        rep = self.syncer.run()
+        self.assertEqual(rep["invoices"]["changed"], 1)
+
     def test_session_timezone_does_not_matter(self):
         self.conn.execute(f"ALTER DATABASE {self.dbname} SET timezone TO 'Europe/Warsaw'")
         rep = self.syncer.run()

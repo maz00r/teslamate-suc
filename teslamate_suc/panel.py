@@ -11,7 +11,7 @@ import logging
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import db
 from api import ApiError, ChargingApi, Usage, run_probe
@@ -72,12 +72,16 @@ class App:
             v = body.get(key)
             return datetime.fromisoformat(v).replace(tzinfo=timezone.utc) if v else None
         start, end = day("from"), day("to")
+        if end:
+            end += timedelta(days=1)  # "to" includes the whole chosen day
         if start and end and start >= end:
             raise ValueError("data „od” musi być przed „do”")
         # dry_run=False from the panel counts only when the dry_run option is also off.
         return self.syncer.run(start=start, end=end, dry_run=body.get("dry_run", True))
 
     def undo(self, batch_id: str) -> dict:
+        if self.opts.get("dry_run", True):
+            raise ValueError("cofanie zmienia TeslaMate — wyłącz dry_run w konfiguracji, żeby cofnąć zapis")
         conn = db.connect(self.opts)
         try:
             return db.undo_batch(conn, batch_id)

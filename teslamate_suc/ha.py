@@ -49,7 +49,8 @@ def publish(summary: dict, token_status: dict) -> None:
                        dry_run=summary.get("dry_run"), error=summary.get("error")))
         for key, name in (("unmatched", "niedopasowane faktury"), ("review", "do przeglądu"),
                           ("written", "zapisane koszty"), ("to_write", "koszty do zapisu"),
-                          ("lonely_tesla", "ładowania Tesla bez faktury")):
+                          ("lonely_tesla", "ładowania Tesla bez faktury"),
+                          ("stale", "nasze koszty bez dopasowania")):
             set_state(f"sensor.suc_{key}", summary.get(key, 0),
                       dict(dev, friendly_name=f"SuC: {name}", state_class="measurement"))
     tok = "ok" if token_status.get("logged_in") else (

@@ -20,6 +20,7 @@ from decimal import ROUND_DOWN, Decimal
 from parse import CENT, Invoice
 
 MAX_COST = Decimal("9999.99")  # charging_processes.cost is numeric(6,2)
+REASON_OVERWRITE = "nadpisanie (overwrite_cost)"
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,8 @@ def split_exact(amount: Decimal, weights: list[Decimal], unit: Decimal = CENT) -
     n = len(weights)
     if n == 1:
         return [amount]
+    if amount < 0:  # ROUND_DOWN truncates towards zero: compute on |amount| and restore the sign
+        return [-x for x in split_exact(-amount, weights, unit)]
     total_w = sum(weights)
     if total_w <= 0:
         weights, total_w = [Decimal(1)] * n, Decimal(n)
@@ -191,8 +194,8 @@ def costs_by_process(allocs: list[Allocation]) -> dict[int, Decimal]:
 def decide(target: Decimal, current: Decimal | None, ours: Decimal | None, overwrite: bool) -> tuple[str, str]:
     """Returns (action, reason). action ∈ write | none | skip.
     `ours` = what we wrote earlier (proof the cost belongs to us)."""
-    if target > MAX_COST:
-        return "skip", "kwota poza zakresem numeric(6,2)"
+    if target > MAX_COST or target < 0:
+        return "skip", "kwota poza zakresem (ujemna albo > 9999.99)"
     if current is not None and current == target:
         return "none", "bez zmian"
     if current is None:
@@ -200,5 +203,5 @@ def decide(target: Decimal, current: Decimal | None, ours: Decimal | None, overw
     if ours is not None and current == ours:
         return "write", "korekta faktury"
     if overwrite:
-        return "write", "nadpisanie (overwrite_cost)"
+        return "write", REASON_OVERWRITE
     return "skip", "koszt ustawiony przez kogoś innego"
