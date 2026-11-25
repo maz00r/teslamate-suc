@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Składnia
+        run: python3 -m py_compile teslamate_suc/*.py
+      - name: Testy
+        run: python3 -m unittest -v tests.test_etap1
+      - name: Worker Cloudflare
+        run: node --check cloudflare/worker.js
+      - name: Obraz dodatku się buduje
+        run: docker build -t suc-test teslamate_suc

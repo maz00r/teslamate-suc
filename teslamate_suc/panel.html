@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TeslaMate SuC</title>
+<style>
+:root{--bg:#fafafa;--fg:#1b1b1b;--muted:#666;--card:#fff;--line:#ddd;--ok:#1a7f37;--bad:#c62828;--acc:#1565c0}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--muted:#999;--card:#1c1c1c;--line:#333;--ok:#4caf50;--bad:#ef5350;--acc:#64b5f6}}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;margin:0;padding:16px;line-height:1.45}
+main{max-width:860px;margin:auto}
+section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:12px 0}
+h1{font-size:20px;margin:4px 0 8px}h2{font-size:16px;margin:0 0 8px}
+button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:14px;cursor:pointer;margin:4px 6px 4px 0}
+button.sec{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+button:disabled{opacity:.5;cursor:wait}
+input,textarea{width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px;font:13px monospace}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;overflow:auto;max-height:420px;font-size:12px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.muted{color:var(--muted);font-size:13px}
+a{color:var(--acc)}
+</style></head><body><main>
+<h1>TeslaMate SuC — faktury Supercharger</h1>
+<p class="muted">Etap 1: logowanie do Tesli, rejestracja domeny i sonda historii ładowań. Nic nie jest jeszcze zapisywane do bazy TeslaMate.</p>
+
+<section id="cfg"><h2>Konfiguracja</h2><div id="cfgBody">…</div></section>
+
+<section><h2>1. Domena partnera (jednorazowo)</h2>
+<p class="muted">Tesla sprawdza klucz publiczny pod <span id="pk"></span>. Najpierw wdróż Worker z katalogu <code>cloudflare/</code>.</p>
+<button id="bReg">Zarejestruj domenę</button><button class="sec" id="bChk">Sprawdź rejestrację</button>
+<div id="partner"></div></section>
+
+<section><h2>2. Logowanie do Tesli</h2>
+<div id="tok"></div>
+<button id="bLogin">Zaloguj do Tesli</button>
+<div id="loginStep" hidden>
+<p>Otworzyłem logowanie Tesli w nowej karcie (<a id="loginLink" target="_blank" rel="noopener noreferrer">link, jeśli się nie otworzyło</a>). Po zalogowaniu skopiuj adres ze strony <code>/callback</code> i wklej tutaj:</p>
+<textarea id="pasted" rows="3" placeholder="https://suc.…/callback?code=…&state=…"></textarea>
+<button id="bFinish">Zakończ logowanie</button></div>
+<button class="sec" id="bLogout">Wyloguj</button>
+</section>
+
+<section><h2>3. Sonda historii ładowań</h2>
+<p class="muted">Pobiera historię z ostatnich N dni (każda strona to płatne żądanie) i zapisuje surową odpowiedź. Podsumowanie poniżej zawiera strukturę pól bez danych osobowych — wklej je do rozmowy z Claude.</p>
+<label>Dni wstecz <input id="days" type="number" value="365" min="1" max="3650" style="width:110px"></label>
+<button id="bProbe">Uruchom sondę</button> <a href="api/probe/download" id="dl">pobierz surowy JSON</a>
+<div id="probe"></div></section>
+
+<section><h2>Zużycie API</h2><div id="usage"></div></section>
+<div id="msg" class="bad"></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = t => t ? new Date(t * 1000).toLocaleString('pl-PL') : '—';
+async function call(method, path, body) {
+  $('msg').textContent = '';
+  const r = await fetch(path, {method, headers: {'Content-Type': 'application/json'}, body: body ? JSON.stringify(body) : undefined});
+  const j = await r.json().catch(() => ({error: 'HTTP ' + r.status}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+async function act(btn, fn) {
+  btn.disabled = true;
+  try { await fn(); } catch (e) { $('msg').textContent = e.message; } finally { btn.disabled = false; refresh(); }
+}
+async function refresh() {
+  let s;
+  try { s = await call('GET', 'api/status'); } catch (e) { $('msg').textContent = e.message; return; }
+  $('cfgBody').innerHTML = s.config_missing.length
+    ? `<span class="bad">Brakuje w konfiguracji dodatku: ${s.config_missing.map(esc).join(', ')}</span>`
+    : `<span class="ok">OK</span> · region <b>${esc(s.region)}</b> · domena <b>${esc(s.domain)}</b> · redirect <code>${esc(s.redirect_uri)}</code>`;
+  $('pk').innerHTML = s.public_key_url ? `<a href="${esc(s.public_key_url)}" target="_blank" rel="noopener">${esc(s.public_key_url)}</a>` : '(ustaw domain)';
+  $('partner').innerHTML = s.partner ? `<p class="ok">Zarejestrowano: ${esc(s.partner.domain)} (${esc(s.partner.region)})</p>` : '';
+  const t = s.token;
+  $('tok').innerHTML = t.logged_in
+    ? `<p class="ok">Zalogowano ${fmt(t.logged_in_at)}. Token ważny do ${fmt(t.expires_at)}, odświeżony ${fmt(t.refreshed_at)}.<br><span class="muted">Zakresy: ${esc(t.scope)}</span></p>`
+    : t.login_required ? `<p class="bad">Tesla odrzuciła token (${esc(t.login_required_reason)}). Zaloguj się ponownie.</p>`
+    : '<p class="muted">Nie zalogowano.</p>';
+  if (s.probe) {
+    $('probe').innerHTML = `<p>Sonda ${esc(s.probe.fetched_at)}: <b>${s.probe.sessions}</b> sesji z ${s.probe.days} dni, ${s.probe.pages} str.</p>
+      <pre>${esc(JSON.stringify(s.probe, null, 1))}</pre><button class="sec" id="bCopy">Kopiuj podsumowanie</button>`;
+    $('bCopy').onclick = () => navigator.clipboard.writeText(JSON.stringify(s.probe, null, 1));
+  }
+  const months = Object.entries(s.usage || {}).sort().reverse().slice(0, 3);
+  $('usage').innerHTML = months.length ? months.map(([m, v]) => `${esc(m)}: ${Object.entries(v).map(([k, n]) => `${esc(k)} ${n}`).join(', ')}`).join('<br>') : '<span class="muted">Brak żądań.</span>';
+}
+$('bReg').onclick = e => act(e.target, () => call('POST', 'api/partner/register'));
+$('bChk').onclick = e => act(e.target, async () => { const r = await call('POST', 'api/partner/check'); $('partner').innerHTML += `<pre>${esc(JSON.stringify(r, null, 1))}</pre>`; });
+$('bLogin').onclick = e => act(e.target, async () => {
+  const r = await call('POST', 'api/login/start');
+  $('loginLink').href = r.url; $('loginStep').hidden = false; window.open(r.url, '_blank', 'noopener');
+});
+$('bFinish').onclick = e => act(e.target, async () => { await call('POST', 'api/login/finish', {url: $('pasted').value}); $('pasted').value = ''; $('loginStep').hidden = true; });
+$('bLogout').onclick = e => act(e.target, () => confirm('Usunąć zapisany token Tesli?') ? call('POST', 'api/logout') : null);
+$('bProbe').onclick = e => act(e.target, () => call('POST', 'api/probe', {days: +$('days').value}));
+refresh();
+</script></body></html>
