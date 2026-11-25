@@ -1,4 +1,4 @@
-"""Parser and matcher on real data from the probe (tests/fixtures/probe_compact.json) plus edge cases."""
+"""Parser and matcher on real data from the probe (tests/fixtures/sessions_anon.json) plus edge cases."""
 
 import json
 import os
@@ -13,7 +13,7 @@ import matcher  # noqa: E402
 import parse  # noqa: E402
 from matcher import Process  # noqa: E402
 
-FIX = os.path.join(os.path.dirname(__file__), "fixtures", "probe_compact.json")
+FIX = os.path.join(os.path.dirname(__file__), "fixtures", "sessions_anon.json")
 
 
 def raw_from_compact(c):
@@ -35,7 +35,7 @@ def load():
         return [raw_from_compact(c) for c in json.load(f)["sessions"]]
 
 
-def proc(pid, start, end, kwh=None, cost=None, vin="XP71006"):
+def proc(pid, start, end, kwh=None, cost=None, vin="XP70000"):
     return Process(pid, 1, vin, start, end, None if kwh is None else D(str(kwh)), cost)
 
 
@@ -54,31 +54,31 @@ class TestParseReal(unittest.TestCase):
         self.assertEqual(len(self.invs), 54)
 
     def test_paid_session(self):
-        i = self.by["812654702"]
-        self.assertEqual(i.start, dt("2026-11-23T20:27:37"))  # +01:00 → UTC
+        i = self.by["900053000"]
+        self.assertEqual(i.start, dt("2025-11-24T20:27:37"))  # +01:00 → UTC
         self.assertEqual(i.total, D("65.36"))
         self.assertEqual(i.net_total, D("53.14"))
         self.assertEqual(i.grid_kwh, D("34.4030"))
         self.assertEqual(i.congestion_fee, D("0"))
         self.assertEqual(i.price_per_kwh, D("1.8998"))  # 65.36 / 34.403 — the gross amount is rounded to the grosz
-        self.assertEqual(i.invoice_ids, ["dbb22ded-4cf2-40bd-bc90-57d3e0260a0e"])
+        self.assertEqual(i.invoice_ids, ["cd613e30-d8f1-6adf-91b7-584a2265b1f5"])
         self.assertTrue(i.paid)
 
     def test_summer_offset(self):
-        i = self.by["668002441"]  # +02:00
-        self.assertEqual(i.start, dt("2026-05-08T19:14:23"))
+        i = self.by["900023000"]  # +02:00
+        self.assertEqual(i.start, dt("2025-05-09T19:14:23"))
         self.assertFalse(i.paid)  # UNPAID, but the cost still counts
         self.assertEqual(i.total, D("69.32"))
 
     def test_credit_is_free(self):
-        i = self.by["584760314"]
+        i = self.by["900000000"]
         self.assertTrue(i.is_free)
         self.assertEqual(i.invoice_ids, [])
         self.assertIsNone(i.price_per_kwh)
         self.assertGreater(i.grid_kwh, 0)
 
     def test_partial_credit(self):
-        i = self.by["617792215"]
+        i = self.by["900009000"]
         self.assertEqual(i.total, D("8.10"))
         self.assertEqual(i.pricing_types, ["CREDIT_PARTIAL_PAYMENT"])
 
@@ -106,33 +106,33 @@ class TestGroups(unittest.TestCase):
         return self.by[sid]
 
     def test_1_1(self):
-        i = self.inv("812654702")  # 20:27:37–20:54:44 UTC
-        p = proc(1, dt("2026-11-23T20:27:00"), dt("2026-11-23T20:55:30"), 33.1)
+        i = self.inv("900053000")  # 20:27:37–20:54:44 UTC
+        p = proc(1, dt("2025-11-24T20:27:00"), dt("2025-11-24T20:55:30"), 33.1)
         g, um, lone = matcher.build_groups([i], [p])
         self.assertEqual([x.kind for x in g], ["1:1"])
         a = matcher.allocate(g[0])
         self.assertEqual(matcher.costs_by_process(a), {1: D("65.36")})
 
     def test_tariff_split_at_midnight_is_n_1(self):
-        a, b = self.inv("716916527"), self.inv("716937037")  # 47.21 + 38.85, 15 s apart
-        p = proc(7, dt("2026-07-16T21:55:00"), dt("2026-07-16T22:37:30"), 60.0)
+        a, b = self.inv("900033000"), self.inv("900034000")  # 47.21 + 38.85, 15 s apart
+        p = proc(7, dt("2025-07-17T21:55:00"), dt("2025-07-17T22:37:30"), 60.0)
         g, _, _ = matcher.build_groups([a, b], [p])
         self.assertEqual(g[0].kind, "N:1")
         self.assertEqual(matcher.costs_by_process(matcher.allocate(g[0])), {7: D("86.06")})
 
     def test_back_to_back_two_processes_resolved(self):
-        a, b = self.inv("644806016"), self.inv("644809325")  # 07:33–07:43 and 07:44–07:57 UTC
-        p1 = proc(10, dt("2026-04-01T07:33:20"), dt("2026-04-01T07:43:50"), 21.0)
-        p2 = proc(11, dt("2026-04-01T07:44:20"), dt("2026-04-01T07:57:20"), 18.5)
+        a, b = self.inv("900015000"), self.inv("900016000")  # 07:33–07:43 and 07:44–07:57 UTC
+        p1 = proc(10, dt("2025-04-02T07:33:20"), dt("2025-04-02T07:43:50"), 21.0)
+        p2 = proc(11, dt("2025-04-02T07:44:20"), dt("2025-04-02T07:57:20"), 18.5)
         g, _, _ = matcher.build_groups([a, b], [p1, p2])
         self.assertEqual(len(g), 1)
         self.assertEqual(g[0].kind, "M:N")
         self.assertEqual(matcher.costs_by_process(matcher.allocate(g[0])), {10: D("38.51"), 11: D("33.40")})
 
     def test_1_n_split_by_energy(self):
-        i = self.inv("810768431")  # 95.27 zł, 52.9297 kWh, 10:24–11:01 UTC
-        p1 = proc(20, dt("2026-11-21T10:24:00"), dt("2026-11-21T10:40:00"), 30.0)
-        p2 = proc(21, dt("2026-11-21T10:41:00"), dt("2026-11-21T11:02:00"), 20.0)
+        i = self.inv("900051000")  # 95.27 zł, 52.9297 kWh, 10:24–11:01 UTC
+        p1 = proc(20, dt("2025-11-22T10:24:00"), dt("2025-11-22T10:40:00"), 30.0)
+        p2 = proc(21, dt("2025-11-22T10:41:00"), dt("2025-11-22T11:02:00"), 20.0)
         g, _, _ = matcher.build_groups([i], [p1, p2])
         self.assertEqual(g[0].kind, "1:N")
         al = matcher.allocate(g[0])
@@ -142,25 +142,25 @@ class TestGroups(unittest.TestCase):
         self.assertEqual(sum(a.energy_kwh for a in al), D("52.9297"))
 
     def test_ambiguous_is_review(self):
-        i1, i2 = self.inv("644806016"), self.inv("644809325")
-        p1 = proc(30, dt("2026-04-01T07:30:00"), dt("2026-04-01T08:00:00"), 20)  # both inside p1
-        p2 = proc(31, dt("2026-04-01T07:35:00"), dt("2026-04-01T07:56:00"), 20)  # and inside p2
+        i1, i2 = self.inv("900015000"), self.inv("900016000")
+        p1 = proc(30, dt("2025-04-02T07:30:00"), dt("2025-04-02T08:00:00"), 20)  # both inside p1
+        p2 = proc(31, dt("2025-04-02T07:35:00"), dt("2025-04-02T07:56:00"), 20)  # and inside p2
         g, _, _ = matcher.build_groups([i1, i2], [p1, p2])
         self.assertEqual(g[0].kind, "review")
         self.assertEqual(matcher.allocate(g[0]), [])
 
     def test_unmatched_and_lonely(self):
-        i = self.inv("812654702")
-        far = proc(40, dt("2026-11-23T23:00:00"), dt("2026-11-23T23:30:00"), 10)
-        other_vin = proc(41, dt("2026-11-23T20:27:00"), dt("2026-11-23T20:55:00"), 10, vin="OTHER")
+        i = self.inv("900053000")
+        far = proc(40, dt("2025-11-24T23:00:00"), dt("2025-11-24T23:30:00"), 10)
+        other_vin = proc(41, dt("2025-11-24T20:27:00"), dt("2025-11-24T20:55:00"), 10, vin="OTHER")
         g, um, lone = matcher.build_groups([i], [far, other_vin])
         self.assertEqual(g, [])
-        self.assertEqual([x.session_id for x in um], ["812654702"])
+        self.assertEqual([x.session_id for x in um], ["900053000"])
         self.assertEqual({p.id for p in lone}, {40, 41})
 
     def test_tolerance_boundary(self):
-        i = self.inv("812654702")  # end (unlatch) 20:54:44 UTC
-        p = proc(50, dt("2026-11-23T21:04:40"), dt("2026-11-23T21:30:00"), 10)  # 9:56 after the end
+        i = self.inv("900053000")  # end (unlatch) 20:54:44 UTC
+        p = proc(50, dt("2025-11-24T21:04:40"), dt("2025-11-24T21:30:00"), 10)  # 9:56 after the end
         self.assertEqual(len(matcher.build_groups([i], [p], 10)[0]), 1)
         self.assertEqual(len(matcher.build_groups([i], [p], 9)[0]), 0)
 

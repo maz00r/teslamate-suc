@@ -43,10 +43,10 @@ CREATE TABLE public.charges (
     charger_power smallint NOT NULL, fast_charger_present boolean, conn_charge_cable varchar(255),
     fast_charger_brand varchar(255), fast_charger_type varchar(255), ideal_battery_range_km numeric(6,2) NOT NULL,
     charging_process_id integer NOT NULL REFERENCES charging_processes(id) ON DELETE CASCADE);
-INSERT INTO cars (id, eid, vid, vin, name) VALUES (1, 1, 1, 'XP71006', 'Model Y');
+INSERT INTO cars (id, eid, vid, vin, name) VALUES (1, 1, 1, 'XP70000', 'Model Y');
 """
 
-VIN = "XP71006"
+VIN = "XP70000"
 
 
 class PG:
@@ -123,9 +123,9 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         all_s = {str(s["sessionId"]): s for s in load()}
         # November 2026: 6 sessions; plus the tariff split at midnight in July and a credit (free) in December.
-        self.sessions = [all_s[k] for k in ("812654702", "811893606", "810768431", "810730258", "808957706", "806721000")]
+        self.sessions = [all_s[k] for k in ("900053000", "900052000", "900051000", "900050000", "900049000", "900048000")]
         self.api = FakeApi(self.sessions)
-        self.now = utc("2026-11-25T12:00:00+00:00")
+        self.now = utc("2025-11-26T12:00:00+00:00")
         self.syncer = sync.Syncer(api=self.api, opts=self.opts, data_dir=self.tmp.name, now=lambda: self.now)
         self.pids = {}
         for s in self.sessions:
@@ -170,7 +170,7 @@ class TestSync(Base):
         n = self.conn.execute("SELECT count(*) FROM suc.allocation").fetchone()[0]
         self.assertEqual(n, 6)  # the dashboard has data even in dry-run
         v = self.conn.execute("SELECT price_per_kwh, loss_pct FROM suc.v_charges WHERE charging_process_id=%s",
-                              (self.pids["812654702"],)).fetchone()
+                              (self.pids["900053000"],)).fetchone()
         self.assertAlmostEqual(float(v[0]), 65.36 / 34.403, places=3)
         self.assertAlmostEqual(float(v[1]), 8.0, delta=0.1)
 
@@ -183,27 +183,27 @@ class TestSync(Base):
         self.opts["dry_run"] = False
         rep = self.syncer.run(dry_run=False)
         self.assertEqual(rep["written"], 6)
-        self.assertEqual(self.costs()["812654702"], D("65.36"))
+        self.assertEqual(self.costs()["900053000"], D("65.36"))
         self.assertEqual(self.conn.execute("SELECT count(*) FROM suc.write_log").fetchone()[0], 6)
         rep2 = self.syncer.run(dry_run=False)
         self.assertEqual(rep2["written"], 0)
         self.assertEqual({r["action"] for r in rep2["plan"]}, {"none"})
 
     def test_foreign_cost_kept_unless_overwrite(self):
-        self.conn.execute("UPDATE charging_processes SET cost = 12.34 WHERE id=%s", (self.pids["811893606"],))
+        self.conn.execute("UPDATE charging_processes SET cost = 12.34 WHERE id=%s", (self.pids["900052000"],))
         self.opts["dry_run"] = False
         rep = self.syncer.run(dry_run=False)
         self.assertEqual(rep["written"], 5)
-        self.assertEqual(self.costs()["811893606"], D("12.34"))
+        self.assertEqual(self.costs()["900052000"], D("12.34"))
         self.opts["overwrite_cost"] = True
         rep = self.syncer.run(dry_run=False)
         self.assertEqual(rep["written"], 1)
-        self.assertEqual(self.costs()["811893606"], D("70.21"))
+        self.assertEqual(self.costs()["900052000"], D("70.21"))
 
     def test_invoice_correction_updates_our_cost_only(self):
         self.opts["dry_run"] = False
         self.syncer.run(dry_run=False)
-        self.conn.execute("UPDATE charging_processes SET cost = 1.00 WHERE id=%s", (self.pids["810730258"],))  # user
+        self.conn.execute("UPDATE charging_processes SET cost = 1.00 WHERE id=%s", (self.pids["900050000"],))  # user
         for s in self.sessions:
             for f in s["fees"]:
                 if f["feeType"] == "CHARGING":
@@ -211,35 +211,35 @@ class TestSync(Base):
         rep = self.syncer.run(dry_run=False)
         self.assertEqual(rep["invoices"]["changed"], 6)
         self.assertEqual(rep["written"], 5)
-        self.assertEqual(self.costs()["812654702"], D("66.36"))
-        self.assertEqual(self.costs()["810730258"], D("1.00"))
+        self.assertEqual(self.costs()["900053000"], D("66.36"))
+        self.assertEqual(self.costs()["900050000"], D("1.00"))
 
     def test_undo_restores_and_respects_later_changes(self):
-        self.conn.execute("UPDATE charging_processes SET cost = 5.00 WHERE id=%s", (self.pids["806721000"],))
+        self.conn.execute("UPDATE charging_processes SET cost = 5.00 WHERE id=%s", (self.pids["900048000"],))
         self.opts["dry_run"] = False
         self.opts["overwrite_cost"] = True
         rep = self.syncer.run(dry_run=False)
-        self.conn.execute("UPDATE charging_processes SET cost = 99.00 WHERE id=%s", (self.pids["808957706"],))
+        self.conn.execute("UPDATE charging_processes SET cost = 99.00 WHERE id=%s", (self.pids["900049000"],))
         conn = self.db.connect(self.opts)
         res = self.db.undo_batch(conn, rep["batch_id"])
         conn.close()
         self.assertEqual(res, {"batch_id": rep["batch_id"], "restored": 5, "skipped_changed_since": 1})
         c = self.costs()
-        self.assertEqual(c["806721000"], D("5.00"))
-        self.assertIsNone(c["812654702"])
-        self.assertEqual(c["808957706"], D("99.00"))
+        self.assertEqual(c["900048000"], D("5.00"))
+        self.assertIsNone(c["900053000"])
+        self.assertEqual(c["900049000"], D("99.00"))
 
     def test_non_dc_process_ignored(self):
         all_s = {str(s["sessionId"]): s for s in load()}
-        s = all_s["795975621"]
+        s = all_s["900047000"]
         self.api.sessions.append(s)
         self.add_process("ac", s, dc=False)
         rep = self.syncer.run()
-        self.assertIn("795975621", [u["session"] for u in rep["unmatched"]])
+        self.assertIn("900047000", [u["session"] for u in rep["unmatched"]])
 
     def test_tariff_split_and_credit(self):
         all_s = {str(s["sessionId"]): s for s in load()}
-        a, b, free = all_s["716916527"], all_s["716937037"], all_s["584760314"]
+        a, b, free = all_s["900033000"], all_s["900034000"], all_s["900000000"]
         self.api.sessions = [a, b, free]
         import parse
         ia, ib = parse.parse_session(a), parse.parse_session(b)
@@ -249,7 +249,7 @@ class TestSync(Base):
                           "ideal_battery_range_km, charging_process_id) VALUES (%s,1,150,true,300,%s)", (ia.start, pid))
         self.add_process("free", free)
         self.opts["dry_run"] = False
-        rep = self.syncer.run(start=utc("2025-12-01T00:00:00+00:00"), end=self.now, dry_run=False)
+        rep = self.syncer.run(start=utc("2024-12-02T00:00:00+00:00"), end=self.now, dry_run=False)
         cost = self.conn.execute("SELECT cost FROM charging_processes WHERE id=%s", (pid,)).fetchone()[0]
         self.assertEqual(cost, D("86.06"))
         self.assertEqual(self.costs()["free"], D("0.00"))
@@ -262,11 +262,11 @@ class TestSync(Base):
 
     def test_teslamate_can_delete_process(self):
         self.syncer.run()
-        self.conn.execute("DELETE FROM charging_processes WHERE id=%s", (self.pids["812654702"],))  # no FK blocks it
+        self.conn.execute("DELETE FROM charging_processes WHERE id=%s", (self.pids["900053000"],))  # no FK blocks it
         rep = self.syncer.run()
-        self.assertIn("812654702", [u["session"] for u in rep["unmatched"]])
+        self.assertIn("900053000", [u["session"] for u in rep["unmatched"]])
         n = self.conn.execute("SELECT count(*) FROM suc.allocation WHERE charging_process_id=%s",
-                              (self.pids["812654702"],)).fetchone()[0]
+                              (self.pids["900053000"],)).fetchone()[0]
         self.assertEqual(n, 0)
 
     def test_api_error_saved_in_report(self):
