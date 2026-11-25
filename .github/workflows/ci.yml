@@ -6,16 +6,30 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SUC_TEST_PG: "host=127.0.0.1 port=5432 user=postgres password=test dbname=postgres"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Sterownik PostgreSQL
+        run: pip install "psycopg[binary]==3.2.3"
       - name: Składnia
         run: python3 -m py_compile teslamate_suc/*.py
-      - name: Testy
-        run: python3 -m unittest -v tests.test_etap1
+      - name: Testy (OAuth, API, panel, parser, matcher, baza)
+        run: python3 -m unittest -v tests.test_etap1 tests.test_matcher tests.test_db
       - name: Worker Cloudflare
         run: node --check cloudflare/worker.js
-      - name: Obraz dodatku się buduje
-        run: docker build -t suc-test teslamate_suc
+      - name: Obraz dodatku się buduje i importuje psycopg
+        run: |
+          docker build -t suc-test teslamate_suc
+          docker run --rm --entrypoint python3 suc-test -c "import sys; sys.path.insert(0,'/app'); import psycopg, main, sync, db; print('ok', psycopg.__version__)"

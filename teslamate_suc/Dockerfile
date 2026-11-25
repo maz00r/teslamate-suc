@@ -1,8 +1,8 @@
 ARG BUILD_FROM=alpine:3.20
 FROM ${BUILD_FROM}
 
-# Python stdlib + tzdata only. HTTP via urllib, no extra libraries.
-RUN apk add --no-cache python3 tzdata
+# Python stdlib + psycopg 3 (PostgreSQL driver) from apk. HTTP via urllib.
+RUN apk add --no-cache python3 py3-psycopg tzdata
 
 COPY *.py panel.html /app/
 COPY run.sh /run.sh

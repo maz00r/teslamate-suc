@@ -1,7 +1,7 @@
 name: TeslaMate SuC — faktury Supercharger
-version: "0.1.0"
+version: "0.2.0"
 slug: teslamate_suc
-description: Pobiera faktury z Superchargerów (Tesla Fleet API) i uzupełnia koszty ładowań w TeslaMate. Etap 1 — logowanie Tesla i sonda historii.
+description: Pobiera faktury z Superchargerów (Tesla Fleet API) i uzupełnia koszty ładowań w TeslaMate. Dopasowanie do ładowań, dry-run, cofanie zapisów, sensory w HA.
 url: https://github.com/maz00r/teslamate-suc
 arch:
   - amd64
@@ -13,12 +13,23 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:ev-station
 panel_title: SuC
+homeassistant_api: true
 options:
   client_id: ""
   client_secret: ""
   region: "eu"
   domain: ""
   redirect_uri: ""
+  db_host: ""
+  db_port: 5432
+  db_name: "teslamate"
+  db_user: ""
+  db_password: ""
+  sync_interval_hours: 6
+  lookback_days: 45
+  match_tolerance_min: 10
+  dry_run: true
+  overwrite_cost: false
   log_level: "info"
 schema:
   client_id: str
@@ -26,4 +37,14 @@ schema:
   region: list(eu|na)
   domain: str
   redirect_uri: url
+  db_host: str
+  db_port: port
+  db_name: str
+  db_user: str
+  db_password: password
+  sync_interval_hours: int(1,168)
+  lookback_days: int(1,3650)
+  match_tolerance_min: int(1,60)
+  dry_run: bool
+  overwrite_cost: bool
   log_level: list(debug|info|warning|error)

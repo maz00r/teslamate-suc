@@ -18,7 +18,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:
 a{color:var(--acc)}
 </style></head><body><main>
 <h1>TeslaMate SuC — faktury Supercharger</h1>
-<p class="muted">Etap 1: logowanie do Tesli, rejestracja domeny i sonda historii ładowań. Nic nie jest jeszcze zapisywane do bazy TeslaMate.</p>
+<p class="muted">Faktury z Superchargerów → koszty ładowań w TeslaMate. Zapis do <code>charging_processes.cost</code> tylko po wyłączeniu <code>dry_run</code> w konfiguracji dodatku.</p>
 
 <section id="cfg"><h2>Konfiguracja</h2><div id="cfgBody">…</div></section>
 
@@ -42,6 +42,18 @@ a{color:var(--acc)}
 <label>Dni wstecz <input id="days" type="number" value="365" min="1" max="3650" style="width:110px"></label>
 <button id="bProbe">Uruchom sondę</button> <a href="api/probe/download" id="dl">pobierz surowy JSON</a>
 <div id="probe"></div></section>
+
+
+<section><h2>4. Synchronizacja</h2>
+<div id="syncState"></div>
+<p><label>Od <input id="from" type="date" style="width:160px"></label>
+<label>Do <input id="to" type="date" style="width:160px"></label>
+<span class="muted">puste = ostatnie <code>lookback_days</code> dni</span></p>
+<button id="bDry">Podgląd (dry-run)</button>
+<button id="bWrite" class="sec">Zapisz koszty</button>
+<div id="report"></div>
+<h2 style="margin-top:14px">Zapisy i cofanie</h2><div id="batches" class="muted">—</div>
+</section>
 
 <section><h2>Zużycie API</h2><div id="usage"></div></section>
 <div id="msg" class="bad"></div>
@@ -79,6 +91,10 @@ async function refresh() {
       <pre>${esc(JSON.stringify(s.probe, null, 1))}</pre><button class="sec" id="bCopy">Kopiuj podsumowanie</button>`;
     $('bCopy').onclick = () => navigator.clipboard.writeText(JSON.stringify(s.probe, null, 1));
   }
+  $('syncState').innerHTML = !s.db_configured ? '<p class="bad">Uzupełnij db_host, db_user, db_password w konfiguracji dodatku.</p>'
+    : `<p>Tryb: ${s.dry_run ? '<b>dry_run</b> (tylko podgląd; wyłącz <code>dry_run</code> w konfiguracji, żeby zapisywać)' : '<b class="ok">zapis włączony</b>'}${s.overwrite_cost ? ' · <span class="bad">overwrite_cost</span>' : ''}.
+       ${s.sync && s.sync.finished_at ? `Ostatnio: ${esc(s.sync.finished_at.slice(0,16))} UTC.` : ''}</p>`;
+  $('bWrite').disabled = s.dry_run || !s.db_configured;
   const months = Object.entries(s.usage || {}).sort().reverse().slice(0, 3);
   $('usage').innerHTML = months.length ? months.map(([m, v]) => `${esc(m)}: ${Object.entries(v).map(([k, n]) => `${esc(k)} ${n}`).join(', ')}`).join('<br>') : '<span class="muted">Brak żądań.</span>';
 }
@@ -91,5 +107,43 @@ $('bLogin').onclick = e => act(e.target, async () => {
 $('bFinish').onclick = e => act(e.target, async () => { await call('POST', 'api/login/finish', {url: $('pasted').value}); $('pasted').value = ''; $('loginStep').hidden = true; });
 $('bLogout').onclick = e => act(e.target, () => confirm('Usunąć zapisany token Tesli?') ? call('POST', 'api/logout') : null);
 $('bProbe').onclick = e => act(e.target, () => call('POST', 'api/probe', {days: +$('days').value}));
+
+const money = v => v == null ? '—' : Number(v).toFixed(2);
+const ACT = {write: '✏️ zapis', none: '✓ bez zmian', skip: '⏭ pominięty'};
+function renderReport(r) {
+  if (!r || !r.started_at) { $('report').innerHTML = '<p class="muted">Brak przebiegu.</p>'; return; }
+  const plan = r.plan || [];
+  const w = plan.filter(x => x.action === 'write').length;
+  let h = `<p>${r.dry_run ? '<b>DRY-RUN</b> — nic nie zapisano.' : '<b>ZAPIS</b>'} Zakres ${esc(r.range[0].slice(0,10))} → ${esc(r.range[1].slice(0,10))}. Pobrano ${r.fetched} sesji, grupy: ${esc(JSON.stringify(r.groups))}.<br>
+    ${r.dry_run ? 'Do zapisu' : 'Zapisano'}: <b>${r.dry_run ? w : r.written}</b>, pominięte: ${r.skipped}, niedopasowane faktury: ${r.unmatched.length}, do przeglądu: ${r.review.length}, ładowania Tesla bez faktury: ${r.lonely_tesla.length}.
+    ${r.error ? `<br><span class="bad">Błąd: ${esc(r.error)}</span>` : ''}</p>`;
+  const rows = plan.filter(x => x.action !== 'none');
+  if (rows.length) h += `<details open><summary>Zmiany kosztów (${rows.length})</summary><pre>${rows.map(x =>
+    `${esc(x.start.slice(0,16))}  #${x.process}  ${esc((x.site||'').padEnd(26).slice(0,26))} ${money(x.cost_before).padStart(8)} → ${money(x.cost_after).padStart(8)}  ${ACT[x.action]||x.action}  ${esc(x.reason)}`).join('\n')}</pre></details>`;
+  const same = plan.length - rows.length;
+  if (same) h += `<p class="muted">${same} ładowań już ma poprawny koszt.</p>`;
+  if (r.unmatched.length) h += `<details><summary>Faktury bez ładowania w TeslaMate (${r.unmatched.length})</summary><pre>${r.unmatched.map(x => `${esc(x.start.slice(0,16))}  ${esc(x.site)}  ${money(x.total)}  sesja ${esc(x.session)}`).join('\n')}</pre></details>`;
+  if (r.review.length) h += `<details open><summary class="bad">Do przeglądu — niejednoznaczne (${r.review.length})</summary><pre>${esc(JSON.stringify(r.review, null, 1))}</pre></details>`;
+  if (r.lonely_tesla.length) h += `<details><summary>Ładowania Tesla (DC) bez faktury (${r.lonely_tesla.length})</summary><pre>${r.lonely_tesla.map(x => `${esc(x.start.slice(0,16))}  #${x.process}  ${x.kwh} kWh`).join('\n')}</pre></details>`;
+  $('report').innerHTML = h;
+}
+async function loadBatches() {
+  try {
+    const b = await call('GET', 'api/batches');
+    $('batches').innerHTML = b.length ? b.map(x => `${esc(x.at.slice(0,16))} — ${x.changes} zmian ${x.undone ? '(cofnięte)' : `<button class="sec" data-b="${esc(x.batch_id)}">Cofnij</button>`}`).join('<br>') : 'Brak zapisów.';
+    document.querySelectorAll('[data-b]').forEach(el => el.onclick = e => act(e.target, async () => {
+      if (!confirm('Przywrócić koszty sprzed tego zapisu? Pozycje zmienione później zostaną pominięte.')) return;
+      const r = await call('POST', 'api/undo', {batch_id: el.dataset.b}); alert(`Przywrócono ${r.restored}, pominięto ${r.skipped_changed_since}.`); loadBatches();
+    }));
+  } catch (e) { $('batches').textContent = e.message; }
+}
+const range = () => ({from: $('from').value || null, to: $('to').value || null});
+$('bDry').onclick = e => act(e.target, async () => renderReport(await call('POST', 'api/sync', {...range(), dry_run: true})));
+$('bWrite').onclick = e => act(e.target, async () => {
+  if (!confirm('Zapisać koszty do TeslaMate? Każdą zmianę można cofnąć w sekcji „Zapisy i cofanie”.')) return;
+  renderReport(await call('POST', 'api/sync', {...range(), dry_run: false})); loadBatches();
+});
 refresh();
+call('GET','api/report').then(renderReport).catch(()=>{});
+loadBatches();
 </script></body></html>

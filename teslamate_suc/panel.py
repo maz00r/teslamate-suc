@@ -11,8 +11,12 @@ import logging
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from datetime import datetime, timezone
+
+import db
 from api import ApiError, ChargingApi, Usage, run_probe
 from auth import AuthError, LoginRequired, TeslaAuth, normalize_domain
+from sync import summary
 
 log = logging.getLogger("suc.panel")
 
@@ -22,7 +26,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 class App:
-    def __init__(self, *, opts: dict, auth: TeslaAuth, api: ChargingApi, usage: Usage, data_dir: str):
+    def __init__(self, *, opts: dict, auth: TeslaAuth, api: ChargingApi, usage: Usage, data_dir: str,
+                 syncer=None):
+        self.syncer = syncer
         self.opts = opts
         self.auth = auth
         self.api = api
@@ -50,7 +56,41 @@ class App:
             "partner": self._read_json("partner.json"),
             "probe": self._read_json("probe_summary.json"),
             "usage": self.usage.read(),
+            "db_configured": bool(o.get("db_host") and o.get("db_user") and o.get("db_name")),
+            "dry_run": bool(o.get("dry_run", True)),
+            "overwrite_cost": bool(o.get("overwrite_cost", False)),
+            "sync": summary(self.syncer.last_report()) if self.syncer else {},
         }
+
+    def run_sync(self, body: dict) -> dict:
+        if not self.syncer:
+            raise ValueError("synchronizacja niedostępna")
+        if not (self.opts.get("db_host") and self.opts.get("db_user")):
+            raise ValueError("uzupełnij db_host, db_user i db_password w konfiguracji dodatku")
+
+        def day(key):
+            v = body.get(key)
+            return datetime.fromisoformat(v).replace(tzinfo=timezone.utc) if v else None
+        start, end = day("from"), day("to")
+        if start and end and start >= end:
+            raise ValueError("data „od” musi być przed „do”")
+        # dry_run=False from the panel counts only when the dry_run option is also off.
+        return self.syncer.run(start=start, end=end, dry_run=body.get("dry_run", True))
+
+    def undo(self, batch_id: str) -> dict:
+        conn = db.connect(self.opts)
+        try:
+            return db.undo_batch(conn, batch_id)
+        finally:
+            conn.close()
+
+    def batches(self) -> list:
+        conn = db.connect(self.opts)
+        try:
+            db.migrate(conn)
+            return [dict(r, at=r["at"].isoformat()) for r in db.last_batches(conn)]
+        finally:
+            conn.close()
 
     def save_partner(self, result: dict) -> None:
         with open(os.path.join(self.data_dir, "partner.json"), "w", encoding="utf-8") as f:
@@ -96,7 +136,7 @@ def make_handler(app: App, allowed_peers=INGRESS_PEERS):
                 self._send(200, fn())
             except LoginRequired as e:
                 self._send(401, {"error": str(e), "login_required": True})
-            except (AuthError, ApiError, ValueError) as e:
+            except (AuthError, ApiError, ValueError, RuntimeError) as e:
                 self._send(400, {"error": str(e)})
             except Exception as e:  # noqa: BLE001 — the panel must not crash
                 log.exception("błąd panelu")
@@ -113,6 +153,10 @@ def make_handler(app: App, allowed_peers=INGRESS_PEERS):
                     return self._send(200, f.read(), "text/html; charset=utf-8")
             if path == "/api/status":
                 return self._run(app.status)
+            if path == "/api/report":
+                return self._run(lambda: (app.syncer.last_report() if app.syncer else None) or {})
+            if path == "/api/batches":
+                return self._run(app.batches)
             if path == "/api/probe/download":
                 p = os.path.join(app.data_dir, "probe.json")
                 if not os.path.exists(p):
@@ -140,6 +184,10 @@ def make_handler(app: App, allowed_peers=INGRESS_PEERS):
                 return self._run(reg)
             if path == "/api/partner/check":
                 return self._run(lambda: app.auth.check_partner(app.opts.get("domain", "")))
+            if path == "/api/sync":
+                return self._run(lambda: app.run_sync(self._body()))
+            if path == "/api/undo":
+                return self._run(lambda: app.undo(str(self._body().get("batch_id", ""))))
             if path == "/api/probe":
                 def probe():
                     days = int(self._body().get("days") or 90)
