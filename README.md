@@ -9,9 +9,9 @@ historii ładowań. Do bazy TeslaMate nie trafia jeszcze nic.
 
 ## Przygotowanie (jednorazowo)
 
-1. **Cloudflare Worker** dla `suc.<twoja-domena>`: wklej `cloudflare/worker.js` jako nowy Worker
-   (Workers & Pages → Create → Hello World → Edit code). Potem w Settings → Domains & Routes
-   dodaj Custom Domain `suc.<twoja-domena>`. Sprawdź:
+1. **Cloudflare Worker** dla `suc.<twoja-domena>`: ustaw domenę w `cloudflare/wrangler.toml`, potem
+   `cd cloudflare && npx wrangler@4.14.0 login && npx wrangler@4.14.0 deploy`. Wrangler sam doda
+   Custom Domain z certyfikatem. Sprawdź:
    `https://suc.<domena>/.well-known/appspecific/com.tesla.3p.public-key.pem` zwraca klucz,
    a `https://suc.<domena>/callback` wyświetla stronę.
 2. **developer.tesla.com** → Twoja aplikacja:

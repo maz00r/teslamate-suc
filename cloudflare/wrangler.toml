@@ -1,0 +1,9 @@
+# Deploy: cd cloudflare && npx wrangler@4.14.0 deploy
+name = "teslamate-suc"
+main = "worker.js"
+compatibility_date = "2025-05-01"
+workers_dev = false
+
+[[routes]]
+pattern = "suc.mazurowski.xyz"
+custom_domain = true
