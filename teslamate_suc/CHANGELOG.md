@@ -1,5 +1,8 @@
 # Zmiany
 
+## 0.2.3
+- Plan pokazuje przy pominiętych ładowaniach geofence z TeslaMate (nazwa i stawka) oraz `free_supercharging`, czyli skąd wziął się cudzy koszt.
+
 ## 0.2.2 — poprawki po niezależnym przeglądzie
 - **Krawędź okna:** zapis tylko dla grup, które dotykają właściwego zakresu. Grupa ucięta przez margines
   (np. sesja podzielona o północy) nie nadpisuje już poprawnego kosztu połową kwoty.

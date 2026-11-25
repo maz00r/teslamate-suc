@@ -27,6 +27,13 @@ from test_matcher import load  # noqa: E402
 
 TESLAMATE_DDL = """
 CREATE TYPE public.billing_type AS ENUM ('per_kwh', 'per_minute');
+CREATE TABLE public.car_settings (id bigserial PRIMARY KEY, free_supercharging boolean NOT NULL DEFAULT false);
+INSERT INTO car_settings (free_supercharging) VALUES (false);
+CREATE TABLE public.geofences (
+    id serial PRIMARY KEY, name varchar(255) NOT NULL, latitude numeric(8,6) NOT NULL, longitude numeric(9,6) NOT NULL,
+    radius smallint NOT NULL DEFAULT 25, inserted_at timestamp(0) NOT NULL DEFAULT now(),
+    updated_at timestamp(0) NOT NULL DEFAULT now(), cost_per_unit numeric(6,4), session_fee numeric(6,2),
+    billing_type public.billing_type NOT NULL DEFAULT 'per_kwh');
 CREATE TABLE public.cars (
     id smallint PRIMARY KEY, eid bigint NOT NULL, vid bigint NOT NULL, model varchar(255),
     efficiency double precision, inserted_at timestamp(0) NOT NULL DEFAULT now(),
@@ -190,9 +197,14 @@ class TestSync(Base):
         self.assertEqual({r["action"] for r in rep2["plan"]}, {"none"})
 
     def test_foreign_cost_kept_unless_overwrite(self):
-        self.conn.execute("UPDATE charging_processes SET cost = 12.34 WHERE id=%s", (self.pids["900052000"],))
+        gid = self.conn.execute("INSERT INTO geofences (name, latitude, longitude, cost_per_unit) "
+                                "VALUES ('SuC A', 52, 21, 0) RETURNING id").fetchone()[0]
+        self.conn.execute("UPDATE charging_processes SET cost = 12.34, geofence_id = %s WHERE id=%s",
+                          (gid, self.pids["900052000"]))
         self.opts["dry_run"] = False
         rep = self.syncer.run(dry_run=False)
+        skip = [r for r in rep["plan"] if r["action"] == "skip"]
+        self.assertEqual(skip[0]["geofence"], "SuC A (0.0000/per_kwh)")
         self.assertEqual(rep["written"], 5)
         self.assertEqual(self.costs()["900052000"], D("12.34"))
         self.opts["overwrite_cost"] = True

@@ -144,7 +144,8 @@ class Syncer:
                     action, reason = matcher.decide(target, p.cost, ours.get(pid), overwrite)
                 row = {"process": pid, "start": _iso(p.start), "site": sites.get(pid),
                        "kwh_added": _f(p.energy_added), "cost_before": _f(p.cost), "cost_after": _f(target),
-                       "action": action, "reason": reason}
+                       "action": action, "reason": reason, "geofence": p.geofence,
+                       "free_supercharging": p.free_supercharging}
                 if action == "write" and not dry:
                     # The concurrency check is dropped ONLY for a deliberate overwrite of someone else's cost.
                     ok = db.write_cost(conn, batch_id=batch, process_id=pid, expected=p.cost, new=target,

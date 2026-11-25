@@ -119,7 +119,7 @@ function renderReport(r) {
     ${r.error ? `<br><span class="bad">Błąd: ${esc(r.error)}</span>` : ''}</p>`;
   const rows = plan.filter(x => x.action !== 'none');
   if (rows.length) h += `<details open><summary>Zmiany kosztów (${rows.length})</summary><pre>${rows.map(x =>
-    `${esc(x.start.slice(0,16))}  #${x.process}  ${esc((x.site||'').padEnd(26).slice(0,26))} ${money(x.cost_before).padStart(8)} → ${money(x.cost_after).padStart(8)}  ${ACT[x.action]||x.action}  ${esc(x.reason)}`).join('\n')}</pre></details>`;
+    `${esc(x.start.slice(0,16))}  #${x.process}  ${esc((x.site||'').padEnd(26).slice(0,26))} ${money(x.cost_before).padStart(8)} → ${money(x.cost_after).padStart(8)}  ${ACT[x.action]||x.action}  ${esc(x.reason)}${x.action === 'skip' && x.geofence ? ' · geofence: ' + esc(x.geofence) : ''}${x.action === 'skip' && x.free_supercharging ? ' · free_supercharging' : ''}`).join('\n')}</pre></details>`;
   const same = plan.length - rows.length;
   if (same) h += `<p class="muted">${same} ładowań już ma poprawny koszt.</p>`;
   if (r.unmatched.length) h += `<details><summary>Faktury bez ładowania w TeslaMate (${r.unmatched.length})</summary><pre>${r.unmatched.map(x => `${esc(x.start.slice(0,16))}  ${esc(x.site)}  ${money(x.total)}  sesja ${esc(x.session)}`).join('\n')}</pre></details>`;

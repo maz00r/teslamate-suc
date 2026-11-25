@@ -230,9 +230,15 @@ def load_dc_processes(conn, start: datetime, end: datetime) -> list[Process]:
         SELECT cp.id, cp.car_id, c.vin, cp.start_date, cp.end_date, cp.charge_energy_added, cp.cost,
                (SELECT ch.fast_charger_brand FROM charges ch
                  WHERE ch.charging_process_id = cp.id AND ch.fast_charger_brand IS NOT NULL
-                 ORDER BY ch.date DESC LIMIT 1) AS brand
+                 ORDER BY ch.date DESC LIMIT 1) AS brand,
+               CASE WHEN g.id IS NOT NULL THEN
+                    g.name || ' (' || coalesce(g.cost_per_unit::text, '—') || '/' || g.billing_type::text
+                    || coalesce(', opłata ' || g.session_fee::text, '') || ')' END AS geofence,
+               coalesce(cs.free_supercharging, false) AS free_supercharging
           FROM charging_processes cp
           JOIN cars c ON c.id = cp.car_id
+          LEFT JOIN geofences g ON g.id = cp.geofence_id
+          LEFT JOIN car_settings cs ON cs.id = c.settings_id
          WHERE cp.end_date IS NOT NULL
            AND cp.start_date < %s AND cp.end_date > %s
            AND c.vin IS NOT NULL
@@ -241,7 +247,8 @@ def load_dc_processes(conn, start: datetime, end: datetime) -> list[Process]:
          ORDER BY cp.start_date
         """, (end, start)).fetchall()
     return [Process(r["id"], r["car_id"], r["vin"], r["start_date"], r["end_date"],
-                    r["charge_energy_added"], r["cost"], r["brand"]) for r in rows]
+                    r["charge_energy_added"], r["cost"], r["brand"], r["geofence"], r["free_supercharging"])
+            for r in rows]
 
 
 def replace_allocations(conn, session_ids: list[str], allocs: list[Allocation], kinds: dict[str, str]) -> None:

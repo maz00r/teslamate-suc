@@ -33,6 +33,8 @@ class Process:
     energy_added: Decimal | None
     cost: Decimal | None
     brand: str | None = None
+    geofence: str | None = None  # name and rate of the TeslaMate geofence: a hint at who set the cost
+    free_supercharging: bool = False
 
 
 @dataclass
