@@ -1,5 +1,8 @@
 # Zmiany
 
+## 0.2.1
+- Obraz: dołożona `libpq`, bez niej psycopg się nie importował (0.2.0 nie startowała).
+
 ## 0.2.0
 - Synchronizacja co `sync_interval_hours` (domyślnie 6 h) za ostatnie `lookback_days` dni, a w panelu backfill z zakresem dat.
 - Parser potwierdzony na 54 prawdziwych sesjach: czasy z offsetem → UTC, koszt = suma `totalDue` (brutto),
