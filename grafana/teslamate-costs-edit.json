@@ -1,0 +1,396 @@
+{
+  "uid": "teslamate-costs-edit",
+  "title": "Koszty ładowań — edycja",
+  "tags": [
+    "TeslaMate",
+    "SuC"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "description": "Ręczna edycja charging_processes.cost (Business Table). Koszty z dodatku TeslaMate SuC są zablokowane.",
+  "links": [
+    {
+      "title": "Ładowanie publiczne — faktury",
+      "type": "link",
+      "url": "/d/teslamate-suc"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "Baza",
+        "type": "datasource",
+        "query": "grafana-postgresql-datasource",
+        "current": {
+          "text": "TeslaMate",
+          "value": "TeslaMate"
+        },
+        "hide": 2
+      },
+      {
+        "name": "car_id",
+        "label": "Auto",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "${ds}"
+        },
+        "query": "SELECT id AS __value, coalesce(name, 'Auto ' || id) AS __text FROM cars ORDER BY display_priority, id",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": null,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 16,
+      "type": "volkovlabs-table-panel",
+      "title": "Koszty ładowań — edycja (TeslaMate)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 22,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT cp.id, cp.start_date AS \"Start\", coalesce(c.name, 'Auto ' || c.id) AS \"Auto\",\n       coalesce(g.name, a.name, nullif(concat_ws(' ', a.road, a.house_number), ''), a.display_name) AS \"Miejsce\",\n       cp.charge_energy_added AS \"kWh\", cp.cost,\n       CASE cw.provider WHEN 'tesla' THEN 'SuC: Tesla' WHEN 'greenway' THEN 'SuC: Greenway'\n            WHEN 'manual' THEN 'SuC: ręczny' ELSE '' END AS \"Koszt z dodatku\"\n  FROM charging_processes cp\n  JOIN cars c ON c.id = cp.car_id\n  LEFT JOIN addresses a ON a.id = cp.address_id\n  LEFT JOIN geofences g ON g.id = cp.geofence_id\n  LEFT JOIN suc.cost_written cw ON cw.charging_process_id = cp.id\n WHERE $__timeFilter(cp.start_date) AND cp.end_date IS NOT NULL AND cp.car_id = ANY(ARRAY[$car_id]::int[])\n ORDER BY cp.start_date DESC",
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Start"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kWh"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "kwatth"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyPLN"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "displayName",
+                "value": "Koszt"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "id"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tables": [
+          {
+            "name": "Koszty",
+            "showHeader": true,
+            "stripedRows": true,
+            "expanded": false,
+            "highlightRowsOnHover": true,
+            "pagination": {
+              "enabled": true,
+              "mode": "client"
+            },
+            "items": [
+              {
+                "type": "auto",
+                "enabled": true,
+                "field": {
+                  "name": "id",
+                  "source": "A"
+                },
+                "edit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  },
+                  "permission": {
+                    "mode": "",
+                    "userRole": [
+                      "Editor",
+                      "Admin"
+                    ],
+                    "field": {
+                      "name": "",
+                      "source": ""
+                    }
+                  }
+                },
+                "newRowEdit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "auto",
+                "enabled": true,
+                "field": {
+                  "name": "Start",
+                  "source": "A"
+                },
+                "edit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  },
+                  "permission": {
+                    "mode": "",
+                    "userRole": [
+                      "Editor",
+                      "Admin"
+                    ],
+                    "field": {
+                      "name": "",
+                      "source": ""
+                    }
+                  }
+                },
+                "newRowEdit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "auto",
+                "enabled": true,
+                "field": {
+                  "name": "Auto",
+                  "source": "A"
+                },
+                "edit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  },
+                  "permission": {
+                    "mode": "",
+                    "userRole": [
+                      "Editor",
+                      "Admin"
+                    ],
+                    "field": {
+                      "name": "",
+                      "source": ""
+                    }
+                  }
+                },
+                "newRowEdit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "auto",
+                "enabled": true,
+                "field": {
+                  "name": "Miejsce",
+                  "source": "A"
+                },
+                "edit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  },
+                  "permission": {
+                    "mode": "",
+                    "userRole": [
+                      "Editor",
+                      "Admin"
+                    ],
+                    "field": {
+                      "name": "",
+                      "source": ""
+                    }
+                  }
+                },
+                "newRowEdit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "auto",
+                "enabled": true,
+                "field": {
+                  "name": "kWh",
+                  "source": "A"
+                },
+                "edit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  },
+                  "permission": {
+                    "mode": "",
+                    "userRole": [
+                      "Editor",
+                      "Admin"
+                    ],
+                    "field": {
+                      "name": "",
+                      "source": ""
+                    }
+                  }
+                },
+                "newRowEdit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "auto",
+                "enabled": true,
+                "field": {
+                  "name": "cost",
+                  "source": "A"
+                },
+                "edit": {
+                  "enabled": true,
+                  "editor": {
+                    "type": "number",
+                    "min": 0
+                  },
+                  "permission": {
+                    "mode": "userRole",
+                    "userRole": [
+                      "Editor",
+                      "Admin"
+                    ],
+                    "field": {
+                      "name": "",
+                      "source": ""
+                    }
+                  }
+                },
+                "newRowEdit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "auto",
+                "enabled": true,
+                "field": {
+                  "name": "Koszt z dodatku",
+                  "source": "A"
+                },
+                "edit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  },
+                  "permission": {
+                    "mode": "",
+                    "userRole": [
+                      "Editor",
+                      "Admin"
+                    ],
+                    "field": {
+                      "name": "",
+                      "source": ""
+                    }
+                  }
+                },
+                "newRowEdit": {
+                  "enabled": false,
+                  "editor": {
+                    "type": "string"
+                  }
+                }
+              }
+            ],
+            "update": {
+              "datasource": "${ds}",
+              "payload": {
+                "editorMode": "code",
+                "format": "table",
+                "rawQuery": true,
+                "rawSql": "WITH u AS (\n  UPDATE charging_processes SET cost = NULLIF(NULLIF(${payload.cost:sqlstring}, ''), 'null')::numeric\n   WHERE id = ${payload.id}\n     AND NOT EXISTS (SELECT 1 FROM suc.cost_written WHERE charging_process_id = ${payload.id})\n  RETURNING id)\nSELECT CASE WHEN count(*) = 1 THEN 1\n            ELSE ('Koszt ladowania prowadzi dodatek TeslaMate SuC - zmien go w panelu dodatku. Zapisano: ' || count(*))::int\n       END AS ok\n  FROM u",
+                "refId": "A"
+              }
+            }
+          }
+        ]
+      },
+      "description": "Kliknij ołówek przy wierszu, wpisz koszt w zł i zapisz — trafia do charging_processes.cost. Wiersze z kolumną „Koszt z dodatku” zmieniasz w panelu dodatku TeslaMate SuC."
+    }
+  ]
+}

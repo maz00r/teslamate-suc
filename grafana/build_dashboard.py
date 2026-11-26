@@ -52,6 +52,18 @@ QUERIES = {
        car_id
   FROM suc.v_charges {WHERE}
  ORDER BY start_date DESC""",
+    "costs": """SELECT cp.id, cp.start_date AS "Start", coalesce(c.name, 'Auto ' || c.id) AS "Auto",
+       coalesce(g.name, a.name, nullif(concat_ws(' ', a.road, a.house_number), ''), a.display_name) AS "Miejsce",
+       cp.charge_energy_added AS "kWh", cp.cost,
+       CASE cw.provider WHEN 'tesla' THEN 'SuC: Tesla' WHEN 'greenway' THEN 'SuC: Greenway'
+            WHEN 'manual' THEN 'SuC: ręczny' ELSE '' END AS "Koszt z dodatku"
+  FROM charging_processes cp
+  JOIN cars c ON c.id = cp.car_id
+  LEFT JOIN addresses a ON a.id = cp.address_id
+  LEFT JOIN geofences g ON g.id = cp.geofence_id
+  LEFT JOIN suc.cost_written cw ON cw.charging_process_id = cp.id
+ WHERE $__timeFilter(cp.start_date) AND cp.end_date IS NOT NULL AND cp.car_id = ANY(ARRAY[$car_id]::int[])
+ ORDER BY cp.start_date DESC""",
     "unmatched": f"""SELECT start_utc AS "Start", {PROV_LABEL} AS "Źródło", site_name AS "Ładowarka",
        grid_kwh AS "kWh z sieci", total AS "Kwota", currency AS "Waluta", status AS "Status", session_id AS "Sesja"
   FROM suc.invoice
@@ -155,6 +167,49 @@ un = panel(15, "table", "Sesje bez ładowania w TeslaMate / do przeglądu", "unm
 un["fieldConfig"] = {"defaults": {"decimals": 2}, "overrides": [
     {"matcher": {"id": "byName", "options": "Start"}, "properties": [{"id": "unit", "value": "dateTimeAsLocal"}]}]}
 
+# Editable TeslaMate cost (Business Table). Costs written by the add-on (suc.cost_written) are refused:
+# a raw UPDATE would bypass write_log/cost_written — those are changed in the add-on panel (manual costs).
+# Casting the message to int is how a single statement gives an error with our text. It has to depend on count(*),
+# otherwise Postgres folds the constant while planning and the query fails every time.
+COST_UPDATE = """WITH u AS (
+  UPDATE charging_processes SET cost = NULLIF(NULLIF(${payload.cost:sqlstring}, ''), 'null')::numeric
+   WHERE id = ${payload.id}
+     AND NOT EXISTS (SELECT 1 FROM suc.cost_written WHERE charging_process_id = ${payload.id})
+  RETURNING id)
+SELECT CASE WHEN count(*) = 1 THEN 1
+            ELSE ('Koszt ladowania prowadzi dodatek TeslaMate SuC - zmien go w panelu dodatku. Zapisano: ' || count(*))::int
+       END AS ok
+  FROM u"""
+
+
+def col(name, editable=False, editor="number"):
+    return {"type": "auto", "enabled": True, "field": {"name": name, "source": "A"},
+            "edit": {"enabled": editable, "editor": {"type": editor, "min": 0} if editable else {"type": "string"},
+                     "permission": {"mode": "userRole" if editable else "", "userRole": ["Editor", "Admin"],
+                                    "field": {"name": "", "source": ""}}},
+            "newRowEdit": {"enabled": False, "editor": {"type": "string"}}}
+
+
+costs = panel(16, "volkovlabs-table-panel", "Koszty ładowań — edycja (TeslaMate)", "costs",
+              {"h": 22, "w": 24, "x": 0, "y": 0},
+              description="Kliknij ołówek przy wierszu, wpisz koszt w zł i zapisz — trafia do charging_processes.cost. "
+                          "Wiersze z kolumną „Koszt z dodatku” zmieniasz w panelu dodatku TeslaMate SuC.")
+costs["fieldConfig"] = {"defaults": {}, "overrides": [
+    {"matcher": {"id": "byName", "options": "Start"}, "properties": [{"id": "unit", "value": "dateTimeAsLocal"}]},
+    {"matcher": {"id": "byName", "options": "kWh"}, "properties": [{"id": "unit", "value": "kwatth"}, {"id": "decimals", "value": 1}]},
+    {"matcher": {"id": "byName", "options": "cost"}, "properties": [{"id": "unit", "value": PLN}, {"id": "decimals", "value": 2},
+                                                                     {"id": "displayName", "value": "Koszt"}]},
+    {"matcher": {"id": "byName", "options": "id"}, "properties": [{"id": "decimals", "value": 0}]},
+]}
+costs["options"] = {"tables": [{
+    "name": "Koszty", "showHeader": True, "stripedRows": True, "expanded": False, "highlightRowsOnHover": True,
+    "pagination": {"enabled": True, "mode": "client"},
+    "items": [col("id"), col("Start"), col("Auto"), col("Miejsce"), col("kWh"), col("cost", editable=True),
+              col("Koszt z dodatku")],
+    "update": {"datasource": "${ds}", "payload": {"editorMode": "code", "format": "table", "rawQuery": True,
+                                                    "rawSql": COST_UPDATE, "refId": "A"}},
+}]}
+
 panels += [monthly, price, loss, sites, lst, un]
 
 dashboard = {
@@ -185,8 +240,24 @@ dashboard = {
     "panels": panels,
 }
 
+# Separate dashboard: editing lives apart from the reports.
+costs_dashboard = {
+    "uid": "teslamate-costs-edit",
+    "title": "Koszty ładowań — edycja",
+    "tags": ["TeslaMate", "SuC"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "editable": True,
+    "time": {"from": "now-90d", "to": "now"},
+    "description": "Ręczna edycja charging_processes.cost (Business Table). Koszty z dodatku TeslaMate SuC są zablokowane.",
+    "links": [{"title": "Ładowanie publiczne — faktury", "type": "link", "url": "/d/teslamate-suc"}],
+    "templating": {"list": dashboard["templating"]["list"][:2]},
+    "panels": [costs],
+}
+
 if __name__ == "__main__":
-    out = os.path.join(os.path.dirname(__file__), "teslamate-suc.json")
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(dashboard, f, ensure_ascii=False, indent=2)
-    print(out)
+    for name, d in (("teslamate-suc.json", dashboard), ("teslamate-costs-edit.json", costs_dashboard)):
+        out = os.path.join(os.path.dirname(__file__), name)
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        print(out)
