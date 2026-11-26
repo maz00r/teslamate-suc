@@ -1,5 +1,23 @@
 # Zmiany
 
+## 0.3.0 — Greenway i koszty ręczne
+- **Greenway:** sesje z konta client.greenwaypolska.pl (AC i DC) dopasowywane do ładowań dowolnego auta po czasie.
+  Logowanie wymaga reCAPTCHA, więc dodatek używa tokenu z Twojej sesji (ważny ~60 dni), wklejanego w panelu.
+  Zakładka „Kopiuj token Greenway” kopiuje go na stronie Greenway. Powiadomienie 7 dni przed wygaśnięciem.
+  Opcja `greenway_enabled` włącza synchronizację co 6 h. Sesja pasująca do dwóch aut naraz trafia do przeglądu.
+- **Koszt ręczny:** w panelu wybierasz ładowanie z TeslaMate i wpisujesz kwotę (opcjonalnie kWh z licznika).
+  Synchronizacje go nie nadpisują, a da się go usunąć albo cofnąć.
+- Własność kosztu jest per źródło (`suc.cost_written.provider`). Tesla, Greenway i koszty ręczne nie nadpisują się nawzajem.
+- Dashboard: filtr „Źródło”, tabela „Ładowarki”, tytuł „Ładowanie publiczne — faktury”.
+- Migracja schematu `suc` do wersji 2 (kolumny `provider`, `charge_kind`), dane z 0.2.x zostają.
+- Po niezależnym przeglądzie:
+  - ładowanie zajęte przez inne źródło albo koszt ręczny nie bierze udziału w dopasowaniu, więc nie ma podwójnego liczenia;
+  - Greenway pomija procesy z Superchargerów;
+  - usunięcie kosztu ręcznego cofa wszystkie jego edycje i oddaje koszt poprzedniemu właścicielowi;
+  - cofnięcie batcha nie rusza kosztu, który ma już innego właściciela, i oznacza tylko faktycznie cofnięte wiersze;
+  - stare zapisy z v1 są przypisane do Tesli;
+  - ostrzeżenie, gdy pobieranie z Greenway przerwie się na limicie stron.
+
 ## 0.2.6
 - `suc.v_charges`: cena za kWh tylko z sesji opłaconych w całości (bez częściowego kredytu), nowa kolumna `full_payment`.
 - Dashboard Grafany `grafana/teslamate-suc.json`.

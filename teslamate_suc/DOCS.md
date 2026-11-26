@@ -33,6 +33,12 @@ Domyślnie działa `dry_run: true`: panel pokazuje, co zostałoby zapisane, a Te
    (te same dane co TeslaMate). W panelu kliknij „Podgląd (dry-run)” z zakresem dat obejmującym całą historię,
    przejrzyj plan, zrób backup HA, wyłącz `dry_run` i kliknij „Zapisz koszty”.
 
+**Greenway:** w panelu SuC przeciągnij link „Kopiuj token Greenway” na pasek zakładek. Zaloguj się na
+client.greenwaypolska.pl, kliknij zakładkę i wklej token w panelu. Potem podgląd/zapis ze źródłem „Greenway”, a dla
+automatu włącz `greenway_enabled`. Token wygasa po ~60 dniach, HA przypomni o wymianie.
+
+**Koszt ręczny:** sekcja „Koszt ręczny” w panelu: wyszukaj ładowanie, wpisz kwotę (i ewentualnie kWh z licznika).
+
 **Grafana:** zaimportuj `grafana/teslamate-suc.json` (Dashboards → New → Import) do folderu TeslaMate.
 Pokazuje wydatki, cenę za kWh, straty ładowania, opłaty postojowe, Superchargery i faktury bez dopasowania.
 Zapytania są w `grafana/build_dashboard.py`.

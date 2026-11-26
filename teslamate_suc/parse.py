@@ -68,6 +68,8 @@ class Invoice:
     invoice_ids: list[str]
     fees_hash: str
     raw: dict = field(repr=False, default_factory=dict)
+    provider: str = "tesla"          # tesla | greenway | manual
+    charge_kind: str | None = None   # AC | DC | None (Tesla: always DC, not checked)
 
     @property
     def end(self) -> datetime:

@@ -4,8 +4,9 @@ import json
 import os
 
 DS = {"type": "grafana-postgresql-datasource", "uid": "${ds}"}
-CAR = "car_id = ANY(ARRAY[$car_id]::int[])"
+CAR = "car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])"
 WHERE = f"WHERE $__timeFilter(start_date) AND {CAR}"
+PROV_LABEL = "CASE provider WHEN 'tesla' THEN 'Tesla' WHEN 'greenway' THEN 'Greenway' ELSE 'ręczny' END"
 
 QUERIES = {
     "spend": f"SELECT sum(invoice_cost) AS \"Wydatki\" FROM suc.v_charges {WHERE}",
@@ -26,7 +27,7 @@ QUERIES = {
   FROM suc.v_charges {WHERE} AND price_per_kwh IS NOT NULL ORDER BY 1""",
     "loss_ts": f"""SELECT start_date AS time, loss_pct AS "Straty [%]", loss_kwh AS "Straty [kWh]"
   FROM suc.v_charges {WHERE} ORDER BY 1""",
-    "sites": f"""SELECT site_name AS "Supercharger",
+    "sites": f"""SELECT {PROV_LABEL} AS "Źródło", coalesce(site_name, '(ręcznie)') AS "Ładowarka",
        count(*) AS "Ładowania",
        sum(grid_kwh) AS "kWh z sieci",
        sum(invoice_cost) AS "Wydatki",
@@ -34,9 +35,10 @@ QUERIES = {
        100 * (sum(grid_kwh) - sum(charge_energy_added)) / nullif(sum(grid_kwh), 0) AS "Straty %",
        coalesce(sum(idle_fee), 0) AS "Postój"
   FROM suc.v_charges {WHERE}
- GROUP BY site_name ORDER BY "Wydatki" DESC""",
+ GROUP BY 1, 2 ORDER BY "Wydatki" DESC""",
     "list": f"""SELECT start_date AS "Start",
-       site_name AS "Supercharger",
+       {PROV_LABEL} AS "Źródło",
+       coalesce(site_name, '(ręcznie)') AS "Ładowarka",
        charge_energy_added AS "kWh do baterii",
        grid_kwh AS "kWh z sieci",
        loss_pct AS "Straty %",
@@ -50,10 +52,10 @@ QUERIES = {
        car_id
   FROM suc.v_charges {WHERE}
  ORDER BY start_date DESC""",
-    "unmatched": """SELECT start_utc AS "Start", site_name AS "Supercharger", grid_kwh AS "kWh z sieci",
-       total AS "Kwota", currency AS "Waluta", status AS "Status", session_id AS "Sesja"
+    "unmatched": f"""SELECT start_utc AS "Start", {PROV_LABEL} AS "Źródło", site_name AS "Ładowarka",
+       grid_kwh AS "kWh z sieci", total AS "Kwota", currency AS "Waluta", status AS "Status", session_id AS "Sesja"
   FROM suc.invoice
- WHERE status IN ('unmatched', 'review') AND $__timeFilter(start_utc)
+ WHERE status IN ('unmatched', 'review') AND $__timeFilter(start_utc) AND provider = ANY(ARRAY[$provider]::text[])
  ORDER BY start_utc DESC""",
 }
 
@@ -83,7 +85,7 @@ def panel(pid, kind, title, q, grid, **extra):
 
 
 panels = [
-    stat(1, "Wydatki na Superchargerach", "spend", PLN, 0, 4, 2, "orange"),
+    stat(1, "Wydatki na ładowanie publiczne", "spend", PLN, 0, 4, 2, "orange"),
     stat(2, "Energia z sieci", "grid", "kwatth", 4, 4, 0),
     stat(3, "Średnia cena", "price", "suffix: zł/kWh", 8, 4, 2, "purple"),
     stat(4, "Straty ładowania", "loss", "percent", 12, 3, 1, "red"),
@@ -124,7 +126,7 @@ loss["fieldConfig"] = {"defaults": {"custom": {"drawStyle": "points", "pointSize
                                            {"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]}]}
 
 money_cols = ["Wydatki", "Postój"]
-sites = panel(13, "table", "Superchargery", "sites", {"h": 9, "w": 12, "x": 12, "y": 13})
+sites = panel(13, "table", "Ładowarki", "sites", {"h": 9, "w": 12, "x": 12, "y": 13})
 sites["fieldConfig"] = {"defaults": {"decimals": 1}, "overrides": [
     *[{"matcher": {"id": "byName", "options": c}, "properties": [{"id": "unit", "value": PLN}, {"id": "decimals", "value": 2}]}
       for c in money_cols],
@@ -149,7 +151,7 @@ lst["fieldConfig"] = {"defaults": {"decimals": 2}, "overrides": [
 ]}
 lst["options"] = {"showHeader": True}
 
-un = panel(15, "table", "Faktury bez ładowania w TeslaMate / do przeglądu", "unmatched", {"h": 6, "w": 24, "x": 0, "y": 34})
+un = panel(15, "table", "Sesje bez ładowania w TeslaMate / do przeglądu", "unmatched", {"h": 6, "w": 24, "x": 0, "y": 34})
 un["fieldConfig"] = {"defaults": {"decimals": 2}, "overrides": [
     {"matcher": {"id": "byName", "options": "Start"}, "properties": [{"id": "unit", "value": "dateTimeAsLocal"}]}]}
 
@@ -157,13 +159,13 @@ panels += [monthly, price, loss, sites, lst, un]
 
 dashboard = {
     "uid": "teslamate-suc",
-    "title": "Supercharger — faktury",
-    "tags": ["TeslaMate", "SuC"],
+    "title": "Ładowanie publiczne — faktury",
+    "tags": ["TeslaMate", "SuC", "Greenway"],
     "timezone": "browser",
     "schemaVersion": 39,
     "editable": True,
     "time": {"from": "now-1y", "to": "now"},
-    "description": "Faktury z Superchargerów (dodatek TeslaMate SuC): wydatki, cena za kWh, straty ładowania, opłaty postojowe.",
+    "description": "Faktury z Superchargerów i Greenway oraz koszty ręczne (dodatek TeslaMate SuC): wydatki, cena za kWh, straty ładowania, opłaty postojowe.",
     "links": [{"title": "TeslaMate", "type": "dashboards", "tags": ["tesla"], "asDropdown": True}],
     "templating": {"list": [
         {"name": "ds", "label": "Baza", "type": "datasource", "query": "grafana-postgresql-datasource",
@@ -171,6 +173,13 @@ dashboard = {
         {"name": "car_id", "label": "Auto", "type": "query", "datasource": DS,
          "query": "SELECT id AS __value, coalesce(name, 'Auto ' || id) AS __text FROM cars ORDER BY display_priority, id",
          "refresh": 1, "includeAll": True, "multi": True, "allValue": None,
+         "current": {"text": "All", "value": "$__all"}},
+        {"name": "provider", "label": "Źródło", "type": "custom", "includeAll": True, "multi": True,
+         "query": "Tesla : tesla, Greenway : greenway, Ręczne : manual",
+         "options": [{"text": "All", "value": "$__all", "selected": True},
+                     {"text": "Tesla", "value": "tesla", "selected": False},
+                     {"text": "Greenway", "value": "greenway", "selected": False},
+                     {"text": "Ręczne", "value": "manual", "selected": False}],
          "current": {"text": "All", "value": "$__all"}},
     ]},
     "panels": panels,

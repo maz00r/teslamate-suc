@@ -1,7 +1,7 @@
 name: TeslaMate SuC — faktury Supercharger
-version: "0.2.6"
+version: "0.3.0"
 slug: teslamate_suc
-description: Pobiera faktury z Superchargerów (Tesla Fleet API) i uzupełnia koszty ładowań w TeslaMate. Dopasowanie do ładowań, dry-run, cofanie zapisów, sensory w HA.
+description: Pobiera faktury z Superchargerów (Tesla Fleet API) i uzupełnia koszty ładowań w TeslaMate. Też Greenway i koszty ręczne. Dry-run, cofanie zapisów, sensory w HA.
 url: https://github.com/maz00r/teslamate-suc
 arch:
   - amd64
@@ -31,6 +31,7 @@ options:
   dry_run: true
   overwrite_cost: false
   zero_is_empty: true
+  greenway_enabled: false
   log_level: "info"
 schema:
   client_id: str
@@ -49,4 +50,5 @@ schema:
   dry_run: bool
   overwrite_cost: bool
   zero_is_empty: bool
+  greenway_enabled: bool
   log_level: list(debug|info|warning|error)

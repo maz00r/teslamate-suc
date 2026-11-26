@@ -25,11 +25,11 @@ jobs:
         run: pip install "psycopg[binary]==3.2.3"
       - name: Składnia
         run: python3 -m py_compile teslamate_suc/*.py
-      - name: Testy (OAuth, API, panel, parser, matcher, baza)
-        run: python3 -m unittest -v tests.test_etap1 tests.test_matcher tests.test_db
+      - name: Testy (OAuth, API, panel, parser, matcher, baza, Greenway)
+        run: python3 -m unittest -v tests.test_etap1 tests.test_matcher tests.test_db tests.test_greenway
       - name: Worker Cloudflare
         run: node --check cloudflare/worker.js
       - name: Obraz dodatku się buduje i importuje psycopg
         run: |
           docker build -t suc-test teslamate_suc
-          docker run --rm --entrypoint python3 suc-test -c "import sys; sys.path.insert(0,'/app'); import psycopg, main, sync, db; print('ok', psycopg.__version__)"
+          docker run --rm --entrypoint python3 suc-test -c "import sys; sys.path.insert(0,'/app'); import psycopg, main, sync, db, greenway; print('ok', psycopg.__version__)"

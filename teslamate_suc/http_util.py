@@ -6,7 +6,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 USER_AGENT = "teslamate-suc/0.1"
 
@@ -16,6 +16,7 @@ class Response:
     status: int
     body: bytes
     content_type: str = ""
+    headers: dict = field(default_factory=dict)  # names in lowercase
 
     @property
     def ok(self) -> bool:
@@ -34,9 +35,11 @@ class Response:
 def send(req: urllib.request.Request, timeout: float) -> Response:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return Response(r.status, r.read(), r.headers.get("Content-Type", ""))
+            return Response(r.status, r.read(), r.headers.get("Content-Type", ""),
+                            {k.lower(): v for k, v in r.headers.items()})
     except urllib.error.HTTPError as e:
-        return Response(e.code, e.read() or b"", e.headers.get("Content-Type", "") if e.headers else "")
+        hdrs = {k.lower(): v for k, v in e.headers.items()} if e.headers else {}
+        return Response(e.code, e.read() or b"", hdrs.get("content-type", ""), hdrs)
 
 
 def request(

@@ -41,7 +41,7 @@ def notify(title: str, message: str, nid: str = "teslamate_suc") -> None:
         log.warning("HA notify: %s", e)
 
 
-def publish(summary: dict, token_status: dict) -> None:
+def publish(summary: dict, token_status: dict, greenway_status: dict | None = None) -> None:
     dev = {"friendly_name": None, "icon": "mdi:ev-station"}
     if summary:
         set_state("sensor.suc_ostatnia_synchronizacja", summary.get("finished_at") or "unknown",
@@ -57,3 +57,21 @@ def publish(summary: dict, token_status: dict) -> None:
         "wymaga logowania" if token_status.get("login_required") else "brak")
     set_state("sensor.suc_token", tok, dict(dev, friendly_name="SuC: token Tesli",
                                             expires_at=token_status.get("expires_at")))
+    if greenway_status is not None:
+        g = greenway_status
+        if not g.get("configured"):
+            state = "brak"
+        elif not g.get("valid"):
+            state = "wygasł"
+        else:
+            state = "ok"
+        set_state("sensor.suc_greenway_token", state,
+                  dict(dev, friendly_name="SuC: token Greenway", days_left=g.get("days_left"),
+                       expires_at=g.get("expires_at")))
+        days = g.get("days_left")
+        if g.get("configured") and (not g.get("valid") or (days is not None and days < 7)):
+            notify("TeslaMate SuC: token Greenway",
+                   ("Token Greenway wygasł albo został odrzucony." if not g.get("valid")
+                    else f"Token Greenway wygaśnie za {days:.0f} dni.")
+                   + " Zaloguj się na client.greenwaypolska.pl, kliknij zakładkę „Kopiuj token Greenway” "
+                     "i wklej go w panelu SuC.", nid="teslamate_suc_greenway")

@@ -8,11 +8,12 @@ import os
 import threading
 import time
 
+import greenway as gw
 import ha
 from api import ChargingApi, Usage
 from auth import AuthError, LoginRequired, TeslaAuth, TokenStore
 from panel import App, serve
-from sync import Syncer, summary
+from sync import Syncer, summary_all
 
 DATA_DIR = os.environ.get("SUC_DATA_DIR", "/data")
 DEFAULTS = {
@@ -32,6 +33,7 @@ DEFAULTS = {
     "dry_run": True,
     "overwrite_cost": False,
     "zero_is_empty": True,
+    "greenway_enabled": False,
     "log_level": "info",
 }
 KEEPALIVE_EVERY_S = 3600
@@ -77,7 +79,7 @@ def sync_loop(app: App, stop: threading.Event) -> None:
     while not stop.is_set():
         if db_configured(app.opts) and app.auth.status().get("logged_in"):
             try:
-                app.syncer.run()
+                app.syncer.run(provider="tesla")
                 notified = False
             except LoginRequired as e:
                 log.warning("sync: %s", e)
@@ -86,8 +88,15 @@ def sync_loop(app: App, stop: threading.Event) -> None:
                               "Tesla odrzuciła token. Otwórz panel SuC i kliknij „Zaloguj do Tesli”.")
                     notified = True
             except Exception as e:  # noqa: BLE001
-                log.error("sync: %s", e)
-        ha.publish(summary(app.syncer.last_report()), app.auth.status())
+                log.error("sync tesla: %s", e)
+        if db_configured(app.opts) and app.opts.get("greenway_enabled") and app.greenway.status().get("valid"):
+            try:
+                app.syncer.run(provider="greenway")
+            except gw.GreenwayTokenExpired as e:
+                log.warning("sync greenway: %s", e)
+            except Exception as e:  # noqa: BLE001
+                log.error("sync greenway: %s", e)
+        ha.publish(summary_all(app.syncer), app.auth.status(), app.greenway.status())
         stop.wait(interval)
 
 
@@ -102,8 +111,9 @@ def main() -> None:
                      redirect_uri=opts["redirect_uri"], store=TokenStore(DATA_DIR))
     usage = Usage(DATA_DIR)
     api = ChargingApi(auth, usage)
+    greenway = gw.GreenwayClient(DATA_DIR)
     app = App(opts=opts, auth=auth, api=api, usage=usage, data_dir=DATA_DIR,
-              syncer=Syncer(api=api, opts=opts, data_dir=DATA_DIR))
+              syncer=Syncer(api=api, opts=opts, data_dir=DATA_DIR, greenway=greenway), greenway=greenway)
     stop = threading.Event()
     threading.Thread(target=keepalive, args=(auth, stop), daemon=True, name="keepalive").start()
     threading.Thread(target=sync_loop, args=(app, stop), daemon=True, name="sync").start()

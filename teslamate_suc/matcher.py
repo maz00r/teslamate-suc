@@ -36,6 +36,7 @@ class Process:
     brand: str | None = None
     geofence: str | None = None  # name and rate of the TeslaMate geofence: a hint at who set the cost
     free_supercharging: bool = False
+    has_dc: bool = True          # at least one sample with fast_charger_present
 
 
 @dataclass
@@ -62,12 +63,20 @@ def _overlap_s(a0, a1, b0, b1) -> float:
     return (min(a1, b1) - max(a0, b0)).total_seconds()
 
 
-def touches(inv: Invoice, p: Process, tol: timedelta) -> bool:
-    return inv.vin == p.vin and _overlap_s(inv.start - tol, inv.end + tol, p.start, p.end) > 0
+def touches(inv: Invoice, p: Process, tol: timedelta, match_vin: bool = True) -> bool:
+    if match_vin and inv.vin != p.vin:
+        return False
+    if inv.charge_kind == "DC" and not p.has_dc:
+        return False
+    if inv.charge_kind == "AC" and p.has_dc:
+        return False
+    return _overlap_s(inv.start - tol, inv.end + tol, p.start, p.end) > 0
 
 
-def build_groups(invoices: list[Invoice], processes: list[Process], tolerance_min: float = 10):
-    """Returns (groups, unmatched_invoices, lonely_processes)."""
+def build_groups(invoices: list[Invoice], processes: list[Process], tolerance_min: float = 10,
+                 match_vin: bool = True):
+    """Returns (groups, unmatched_invoices, lonely_processes).
+    match_vin=False: an invoice without a VIN (Greenway) can match any car; time and AC/DC decide."""
     tol = timedelta(minutes=tolerance_min)
     parent: dict = {}
 
@@ -89,8 +98,8 @@ def build_groups(invoices: list[Invoice], processes: list[Process], tolerance_mi
         find(("p", p.id))
     for inv in invoices:
         find(("i", inv.session_id))
-        for p in by_vin.get(inv.vin, []):
-            if touches(inv, p, tol):
+        for p in (by_vin.get(inv.vin, []) if match_vin else processes):
+            if touches(inv, p, tol, match_vin):
                 union(("i", inv.session_id), ("p", p.id))
 
     comps: dict = {}
@@ -108,7 +117,11 @@ def build_groups(invoices: list[Invoice], processes: list[Process], tolerance_mi
         elif procs and not invs:
             lonely.extend(procs)
         else:
-            groups.append(_classify(invs, procs))
+            g = _classify(invs, procs)
+            # Without a VIN (Greenway) one session cannot be split between two cars: someone has to decide.
+            if not match_vin and len({p.car_id for p in procs}) > 1:
+                g.kind = "review"
+            groups.append(g)
     groups.sort(key=lambda g: g.invoices[0].start)
     unmatched.sort(key=lambda i: i.start)
     lonely.sort(key=lambda p: p.start)

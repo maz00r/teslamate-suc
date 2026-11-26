@@ -1,9 +1,10 @@
 {
   "uid": "teslamate-suc",
-  "title": "Supercharger — faktury",
+  "title": "Ładowanie publiczne — faktury",
   "tags": [
     "TeslaMate",
-    "SuC"
+    "SuC",
+    "Greenway"
   ],
   "timezone": "browser",
   "schemaVersion": 39,
@@ -12,7 +13,7 @@
     "from": "now-1y",
     "to": "now"
   },
-  "description": "Faktury z Superchargerów (dodatek TeslaMate SuC): wydatki, cena za kWh, straty ładowania, opłaty postojowe.",
+  "description": "Faktury z Superchargerów i Greenway oraz koszty ręczne (dodatek TeslaMate SuC): wydatki, cena za kWh, straty ładowania, opłaty postojowe.",
   "links": [
     {
       "title": "TeslaMate",
@@ -53,6 +54,40 @@
           "text": "All",
           "value": "$__all"
         }
+      },
+      {
+        "name": "provider",
+        "label": "Źródło",
+        "type": "custom",
+        "includeAll": true,
+        "multi": true,
+        "query": "Tesla : tesla, Greenway : greenway, Ręczne : manual",
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "Tesla",
+            "value": "tesla",
+            "selected": false
+          },
+          {
+            "text": "Greenway",
+            "value": "greenway",
+            "selected": false
+          },
+          {
+            "text": "Ręczne",
+            "value": "manual",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
       }
     ]
   },
@@ -60,7 +95,7 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Wydatki na Superchargerach",
+      "title": "Wydatki na ładowanie publiczne",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "${ds}"
@@ -78,7 +113,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT sum(invoice_cost) AS \"Wydatki\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])",
+          "rawSql": "SELECT sum(invoice_cost) AS \"Wydatki\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])",
           "format": "table",
           "editorMode": "code"
         }
@@ -128,7 +163,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT sum(grid_kwh) AS \"Energia z sieci\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])",
+          "rawSql": "SELECT sum(grid_kwh) AS \"Energia z sieci\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])",
           "format": "table",
           "editorMode": "code"
         }
@@ -178,7 +213,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT sum(charging_fee) FILTER (WHERE full_payment) / nullif(sum(grid_kwh) FILTER (WHERE full_payment), 0) AS \"Śr. cena\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])",
+          "rawSql": "SELECT sum(charging_fee) FILTER (WHERE full_payment) / nullif(sum(grid_kwh) FILTER (WHERE full_payment), 0) AS \"Śr. cena\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])",
           "format": "table",
           "editorMode": "code"
         }
@@ -228,7 +263,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT 100 * (sum(grid_kwh) - sum(charge_energy_added)) / nullif(sum(grid_kwh), 0) AS \"Straty\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])",
+          "rawSql": "SELECT 100 * (sum(grid_kwh) - sum(charge_energy_added)) / nullif(sum(grid_kwh), 0) AS \"Straty\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])",
           "format": "table",
           "editorMode": "code"
         }
@@ -278,7 +313,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT sum(loss_kwh) AS \"Straty kWh\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])",
+          "rawSql": "SELECT sum(loss_kwh) AS \"Straty kWh\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])",
           "format": "table",
           "editorMode": "code"
         }
@@ -328,7 +363,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT coalesce(sum(idle_fee), 0) AS \"Opłaty postojowe\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])",
+          "rawSql": "SELECT coalesce(sum(idle_fee), 0) AS \"Opłaty postojowe\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])",
           "format": "table",
           "editorMode": "code"
         }
@@ -378,7 +413,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT count(*) AS \"Ładowania\", count(*) FILTER (WHERE free) AS \"Darmowe\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])",
+          "rawSql": "SELECT count(*) AS \"Ładowania\", count(*) FILTER (WHERE free) AS \"Darmowe\" FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])",
           "format": "table",
           "editorMode": "code"
         }
@@ -428,7 +463,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT date_trunc('month', start_date) AS time,\n       sum(invoice_cost) AS \"Wydatki [zł]\",\n       sum(grid_kwh) AS \"Energia z sieci [kWh]\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])\n GROUP BY 1 ORDER BY 1",
+          "rawSql": "SELECT date_trunc('month', start_date) AS time,\n       sum(invoice_cost) AS \"Wydatki [zł]\",\n       sum(grid_kwh) AS \"Energia z sieci [kWh]\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])\n GROUP BY 1 ORDER BY 1",
           "format": "time_series",
           "editorMode": "code"
         }
@@ -531,7 +566,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT start_date AS time, price_per_kwh AS \"Cena [zł/kWh]\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND price_per_kwh IS NOT NULL ORDER BY 1",
+          "rawSql": "SELECT start_date AS time, price_per_kwh AS \"Cena [zł/kWh]\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[]) AND price_per_kwh IS NOT NULL ORDER BY 1",
           "format": "time_series",
           "editorMode": "code"
         }
@@ -575,7 +610,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT start_date AS time, loss_pct AS \"Straty [%]\", loss_kwh AS \"Straty [kWh]\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) ORDER BY 1",
+          "rawSql": "SELECT start_date AS time, loss_pct AS \"Straty [%]\", loss_kwh AS \"Straty [kWh]\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[]) ORDER BY 1",
           "format": "time_series",
           "editorMode": "code"
         }
@@ -646,7 +681,7 @@
     {
       "id": 13,
       "type": "table",
-      "title": "Superchargery",
+      "title": "Ładowarki",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "${ds}"
@@ -664,7 +699,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT site_name AS \"Supercharger\",\n       count(*) AS \"Ładowania\",\n       sum(grid_kwh) AS \"kWh z sieci\",\n       sum(invoice_cost) AS \"Wydatki\",\n       sum(charging_fee) FILTER (WHERE full_payment) / nullif(sum(grid_kwh) FILTER (WHERE full_payment), 0) AS \"Śr. cena\",\n       100 * (sum(grid_kwh) - sum(charge_energy_added)) / nullif(sum(grid_kwh), 0) AS \"Straty %\",\n       coalesce(sum(idle_fee), 0) AS \"Postój\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])\n GROUP BY site_name ORDER BY \"Wydatki\" DESC",
+          "rawSql": "SELECT CASE provider WHEN 'tesla' THEN 'Tesla' WHEN 'greenway' THEN 'Greenway' ELSE 'ręczny' END AS \"Źródło\", coalesce(site_name, '(ręcznie)') AS \"Ładowarka\",\n       count(*) AS \"Ładowania\",\n       sum(grid_kwh) AS \"kWh z sieci\",\n       sum(invoice_cost) AS \"Wydatki\",\n       sum(charging_fee) FILTER (WHERE full_payment) / nullif(sum(grid_kwh) FILTER (WHERE full_payment), 0) AS \"Śr. cena\",\n       100 * (sum(grid_kwh) - sum(charge_energy_added)) / nullif(sum(grid_kwh), 0) AS \"Straty %\",\n       coalesce(sum(idle_fee), 0) AS \"Postój\"\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])\n GROUP BY 1, 2 ORDER BY \"Wydatki\" DESC",
           "format": "table",
           "editorMode": "code"
         }
@@ -795,7 +830,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT start_date AS \"Start\",\n       site_name AS \"Supercharger\",\n       charge_energy_added AS \"kWh do baterii\",\n       grid_kwh AS \"kWh z sieci\",\n       loss_pct AS \"Straty %\",\n       price_per_kwh AS \"Cena\",\n       charging_fee AS \"Ładowanie\",\n       idle_fee AS \"Postój\",\n       invoice_cost AS \"Razem\",\n       CASE WHEN free THEN 'darmowe' WHEN NOT paid THEN 'nieopłacone' ELSE '' END AS \"Status\",\n       match_kind AS \"Dopasowanie\",\n       charging_process_id AS \"id\",\n       car_id\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[])\n ORDER BY start_date DESC",
+          "rawSql": "SELECT start_date AS \"Start\",\n       CASE provider WHEN 'tesla' THEN 'Tesla' WHEN 'greenway' THEN 'Greenway' ELSE 'ręczny' END AS \"Źródło\",\n       coalesce(site_name, '(ręcznie)') AS \"Ładowarka\",\n       charge_energy_added AS \"kWh do baterii\",\n       grid_kwh AS \"kWh z sieci\",\n       loss_pct AS \"Straty %\",\n       price_per_kwh AS \"Cena\",\n       charging_fee AS \"Ładowanie\",\n       idle_fee AS \"Postój\",\n       invoice_cost AS \"Razem\",\n       CASE WHEN free THEN 'darmowe' WHEN NOT paid THEN 'nieopłacone' ELSE '' END AS \"Status\",\n       match_kind AS \"Dopasowanie\",\n       charging_process_id AS \"id\",\n       car_id\n  FROM suc.v_charges WHERE $__timeFilter(start_date) AND car_id = ANY(ARRAY[$car_id]::int[]) AND provider = ANY(ARRAY[$provider]::text[])\n ORDER BY start_date DESC",
           "format": "table",
           "editorMode": "code"
         }
@@ -923,7 +958,7 @@
     {
       "id": 15,
       "type": "table",
-      "title": "Faktury bez ładowania w TeslaMate / do przeglądu",
+      "title": "Sesje bez ładowania w TeslaMate / do przeglądu",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "${ds}"
@@ -941,7 +976,7 @@
             "type": "grafana-postgresql-datasource",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT start_utc AS \"Start\", site_name AS \"Supercharger\", grid_kwh AS \"kWh z sieci\",\n       total AS \"Kwota\", currency AS \"Waluta\", status AS \"Status\", session_id AS \"Sesja\"\n  FROM suc.invoice\n WHERE status IN ('unmatched', 'review') AND $__timeFilter(start_utc)\n ORDER BY start_utc DESC",
+          "rawSql": "SELECT start_utc AS \"Start\", CASE provider WHEN 'tesla' THEN 'Tesla' WHEN 'greenway' THEN 'Greenway' ELSE 'ręczny' END AS \"Źródło\", site_name AS \"Ładowarka\",\n       grid_kwh AS \"kWh z sieci\", total AS \"Kwota\", currency AS \"Waluta\", status AS \"Status\", session_id AS \"Sesja\"\n  FROM suc.invoice\n WHERE status IN ('unmatched', 'review') AND $__timeFilter(start_utc) AND provider = ANY(ARRAY[$provider]::text[])\n ORDER BY start_utc DESC",
           "format": "table",
           "editorMode": "code"
         }

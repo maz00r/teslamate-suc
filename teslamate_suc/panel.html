@@ -44,8 +44,19 @@ a{color:var(--acc)}
 <div id="probe"></div></section>
 
 
+<section><h2>Greenway</h2>
+<div id="gwState" class="muted">…</div>
+<p class="muted">Greenway wymaga captchy przy logowaniu, więc dodatek używa tokenu z Twojej sesji (ważny ok. 60 dni).
+Przeciągnij na pasek zakładek: <a id="gwBm" href="#" style="font-weight:600">Kopiuj token Greenway</a>.
+Potem zaloguj się na <a href="https://client.greenwaypolska.pl" target="_blank" rel="noopener">client.greenwaypolska.pl</a>,
+kliknij zakładkę i wklej token tutaj.</p>
+<textarea id="gwToken" rows="2" placeholder="eyJ…"></textarea>
+<button id="bGwSave">Zapisz token</button> <button class="sec" id="bGwClear">Usuń token</button>
+</section>
+
 <section><h2>4. Synchronizacja</h2>
 <div id="syncState"></div>
+<p><label>Źródło <select id="prov" style="padding:5px"><option value="tesla">Tesla Supercharger</option><option value="greenway">Greenway</option></select></label></p>
 <p><label>Od <input id="from" type="date" style="width:160px"></label>
 <label>Do <input id="to" type="date" style="width:160px"></label>
 <span class="muted">puste = ostatnie <code>lookback_days</code> dni</span></p>
@@ -53,6 +64,19 @@ a{color:var(--acc)}
 <button id="bWrite" class="sec">Zapisz koszty</button>
 <div id="report"></div>
 <h2 style="margin-top:14px">Zapisy i cofanie</h2><div id="batches" class="muted">—</div>
+</section>
+
+<section><h2>Koszt ręczny</h2>
+<p class="muted">Dla ładowań spoza Tesli i Greenway (inna sieć, hotel, znajomy). Wpisany koszt nie zostanie nadpisany przez synchronizację.</p>
+<p><input id="mQ" placeholder="szukaj: miejsce, miasto albo id ładowania" style="width:60%"> <button class="sec" id="bMFind">Szukaj (90 dni)</button></p>
+<div id="mList" class="muted">—</div>
+<div id="mForm" hidden>
+<p>Ładowanie <b id="mSel"></b></p>
+<p><label>Kwota [zł] <input id="mAmount" inputmode="decimal" style="width:120px"></label>
+<label>kWh z licznika (opcjonalnie) <input id="mKwh" inputmode="decimal" style="width:120px"></label></p>
+<p><input id="mNote" placeholder="notatka (opcjonalnie)" style="width:60%"></p>
+<button id="bMSave">Zapisz koszt</button> <button class="sec" id="bMDel">Usuń koszt ręczny</button>
+</div>
 </section>
 
 <section><h2>Zużycie API</h2><div id="usage"></div></section>
@@ -95,6 +119,13 @@ async function refresh() {
     : `<p>Tryb: ${s.dry_run ? '<b>dry_run</b> (tylko podgląd; wyłącz <code>dry_run</code> w konfiguracji, żeby zapisywać)' : '<b class="ok">zapis włączony</b>'}${s.overwrite_cost ? ' · <span class="bad">overwrite_cost</span>' : ''}.
        ${s.sync && s.sync.finished_at ? `Ostatnio: ${esc(s.sync.finished_at.slice(0,16))} UTC.` : ''}</p>`;
   $('bWrite').disabled = s.dry_run || !s.db_configured;
+  $('gwBm').href = s.greenway_bookmarklet;
+  const g = s.greenway || {};
+  $('gwState').innerHTML = !s.greenway_enabled ? '<span class="muted">Wyłączone — włącz <code>greenway_enabled</code> w konfiguracji dodatku, żeby synchronizować co 6 h (podgląd działa i bez tego).</span><br>' : '';
+  $('gwState').innerHTML += !g.configured ? '<span class="bad">Brak tokenu.</span>'
+    : !g.valid ? '<span class="bad">Token wygasł albo został odrzucony — wklej nowy.</span>'
+    : `<span class="ok">Token OK</span>, ważny jeszcze ${g.days_left ?? '?'} dni (do ${fmt(g.expires_at)}).`;
+  window._dry = s.dry_run;
   const months = Object.entries(s.usage || {}).sort().reverse().slice(0, 3);
   $('usage').innerHTML = months.length ? months.map(([m, v]) => `${esc(m)}: ${Object.entries(v).map(([k, n]) => `${esc(k)} ${n}`).join(', ')}`).join('<br>') : '<span class="muted">Brak żądań.</span>';
 }
@@ -131,14 +162,15 @@ function renderReport(r) {
 async function loadBatches() {
   try {
     const b = await call('GET', 'api/batches');
-    $('batches').innerHTML = b.length ? b.map(x => `${esc(x.at.slice(0,16))} — ${x.changes} zmian ${x.undone ? '(cofnięte)' : `<button class="sec" data-b="${esc(x.batch_id)}">Cofnij</button>`}`).join('<br>') : 'Brak zapisów.';
+    $('batches').innerHTML = b.length ? b.map(x => `${esc(x.at.slice(0,16))} — ${esc(SRC[x.provider] || x.provider)}: ${x.changes} zmian ${x.undone ? '(cofnięte)' : `<button class="sec" data-b="${esc(x.batch_id)}">Cofnij</button>`}`).join('<br>') : 'Brak zapisów.';
     document.querySelectorAll('[data-b]').forEach(el => el.onclick = e => act(e.target, async () => {
       if (!confirm('Przywrócić koszty sprzed tego zapisu? Pozycje zmienione później zostaną pominięte, a cofnięte ładowania nie będą już synchronizowane.')) return;
       const r = await call('POST', 'api/undo', {batch_id: el.dataset.b}); alert(`Przywrócono ${r.restored}, pominięto ${r.skipped_changed_since}.`); loadBatches();
     }));
   } catch (e) { $('batches').textContent = e.message; }
 }
-const range = () => ({from: $('from').value || null, to: $('to').value || null});
+const range = () => ({from: $('from').value || null, to: $('to').value || null, provider: $('prov').value});
+$('prov').onchange = () => call('GET', 'api/report?provider=' + $('prov').value).then(renderReport).catch(() => {});
 $('bDry').onclick = e => act(e.target, async () => renderReport(await call('POST', 'api/sync', {...range(), dry_run: true})));
 $('bWrite').onclick = e => act(e.target, async () => {
   if (!confirm('Zapisać koszty do TeslaMate? Każdą zmianę można cofnąć w sekcji „Zapisy i cofanie”.')) return;
@@ -146,5 +178,28 @@ $('bWrite').onclick = e => act(e.target, async () => {
 });
 refresh();
 call('GET','api/report').then(renderReport).catch(()=>{});
+$('bGwSave').onclick = e => act(e.target, async () => { await call('POST', 'api/greenway/token', {token: $('gwToken').value}); $('gwToken').value = ''; });
+$('bGwClear').onclick = e => act(e.target, () => confirm('Usunąć token Greenway?') ? call('POST', 'api/greenway/token', {clear: true}) : null);
+let mSel = null;
+const SRC = {tesla: 'Tesla', greenway: 'Greenway', manual: 'ręczny'};
+$('bMFind').onclick = e => act(e.target, async () => {
+  const rows = await call('POST', 'api/manual/candidates', {q: $('mQ').value, days: 90});
+  $('mList').innerHTML = rows.length ? '<pre>' + rows.map(r => `<a href="#" data-m="${r.id}">#${r.id}</a>  ${esc(r.start_date.slice(0,16).replace('T',' '))}  ${esc(r.car)}  ${esc((r.place||'?') + (r.city ? ', ' + r.city : ''))}  ${r.kwh ?? '—'} kWh ${r.dc ? 'DC' : 'AC'}  koszt: ${money(r.cost)}${r.cost_source ? ' (' + SRC[r.cost_source] + ')' : ''}${r.invoice_source ? ' · faktura: ' + esc(r.invoice_source) : ''}`).join('\n') + '</pre>' : 'Nic nie znaleziono.';
+  document.querySelectorAll('[data-m]').forEach(a => a.onclick = ev => {
+    ev.preventDefault(); const r = rows.find(x => String(x.id) === a.dataset.m); mSel = r.id;
+    $('mSel').textContent = `#${r.id} — ${r.start_date.slice(0,16).replace('T',' ')} ${r.place || ''}, ${r.kwh ?? '—'} kWh, teraz ${money(r.cost)}`;
+    $('mAmount').value = r.cost ?? ''; $('mKwh').value = ''; $('mNote').value = ''; $('mForm').hidden = false;
+    $('bMDel').hidden = r.cost_source !== 'manual';
+  });
+});
+$('bMSave').onclick = e => act(e.target, async () => {
+  if (window._dry) throw new Error('Wyłącz dry_run w konfiguracji dodatku, żeby zapisywać koszty.');
+  const r = await call('POST', 'api/manual/save', {process: mSel, amount: $('mAmount').value, kwh: $('mKwh').value, note: $('mNote').value});
+  alert(`Zapisano #${r.process}: ${money(r.cost_before)} → ${money(r.cost_after)}`); loadBatches();
+});
+$('bMDel').onclick = e => act(e.target, async () => {
+  if (!confirm('Usunąć koszt ręczny i przywrócić poprzednią wartość?')) return;
+  const r = await call('POST', 'api/manual/delete', {process: mSel}); alert(`Przywrócono: ${r.restored}`); $('mForm').hidden = true; loadBatches();
+});
 loadBatches();
 </script></body></html>

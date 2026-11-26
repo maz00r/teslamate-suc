@@ -50,7 +50,11 @@ CREATE TABLE public.charges (
     charger_power smallint NOT NULL, fast_charger_present boolean, conn_charge_cable varchar(255),
     fast_charger_brand varchar(255), fast_charger_type varchar(255), ideal_battery_range_km numeric(6,2) NOT NULL,
     charging_process_id integer NOT NULL REFERENCES charging_processes(id) ON DELETE CASCADE);
+CREATE TABLE public.addresses (
+    id serial PRIMARY KEY, display_name varchar(512), name varchar(255), house_number varchar(255),
+    road varchar(255), city varchar(255));
 INSERT INTO cars (id, eid, vid, vin, name) VALUES (1, 1, 1, 'XP70000', 'Model Y');
+INSERT INTO cars (id, eid, vid, vin, name) VALUES (2, 2, 2, 'XP79999', 'Drugie');
 """
 
 VIN = "XP70000"
@@ -383,6 +387,207 @@ class TestSync(Base):
         with self.assertRaises(RuntimeError):
             self.syncer.run()
         self.assertIn("Fleet API leży", self.syncer.last_report()["error"])
+
+
+class FakeGreenway:
+    def __init__(self, sessions):
+        self.sessions = sessions
+
+    def fetch_sessions(self, since=None):
+        return [json.loads(json.dumps(x)) for x in self.sessions]
+
+    def status(self):
+        return {"configured": True, "valid": True}
+
+
+def gw_session(sid, start, stop, kwh, price, kind):
+    return {"session_id": sid, "charging_from": start, "charging_to": stop, "connected_from": start,
+            "connected_to": stop, "total_kwh_float": kwh, "price_float": price, "currency": "PLN",
+            "connector_ac_dc": kind, "location_name": "Galeria", "location_city": "Miasto",
+            "session_payment_status": "SessionPaymentStatus_Paid", "invoice_id": None,
+            "running_session_boolean": False}
+
+
+class TestMultiSource(Base):
+    def setUp(self):
+        super().setUp()
+        self.opts["dry_run"] = False
+        # AC at Greenway on the second car + DC at Greenway on the first one
+        self.ac = self.proc(2, "2025-11-10T09:00:00", "2025-11-10T11:58:00", 18.5, dc=False)
+        self.dc = self.proc(1, "2025-11-12T15:00:30", "2025-11-12T15:29:00", 28.0, dc=True)
+        self.manual_target = self.proc(1, "2025-11-14T08:00:00", "2025-11-14T10:00:00", 11.0, dc=False)
+        self.syncer.greenway = FakeGreenway([
+            gw_session(501, "2025-11-10T09:01:00+00:00", "2025-11-10T12:00:00+00:00", 20.1, 30.15, "AC"),
+            gw_session(502, "2025-11-12T15:00:00+00:00", "2025-11-12T15:30:00+00:00", 30.0, 93.00, "DC"),
+        ])
+
+    def proc(self, car, start, end, kwh, dc):
+        r = self.conn.execute("INSERT INTO charging_processes (start_date, end_date, charge_energy_added, car_id) "
+                              "VALUES (%s,%s,%s,%s) RETURNING id", (start, end, kwh, car)).fetchone()[0]
+        self.conn.execute("INSERT INTO charges (date, charge_energy_added, charger_power, fast_charger_present, "
+                          "ideal_battery_range_km, charging_process_id) VALUES (%s,1,11,%s,300,%s)", (start, dc, r))
+        return r
+
+    def cost(self, pid):
+        return self.conn.execute("SELECT cost FROM charging_processes WHERE id=%s", (pid,)).fetchone()[0]
+
+    def test_greenway_ac_dc_any_car(self):
+        rep = self.syncer.run(provider="greenway", dry_run=False)
+        self.assertEqual(rep["written"], 2)
+        self.assertEqual(self.cost(self.ac), D("30.15"))
+        self.assertEqual(self.cost(self.dc), D("93.00"))
+        v = self.conn.execute("SELECT provider, charge_kind, grid_kwh FROM suc.v_charges WHERE charging_process_id=%s",
+                              (self.ac,)).fetchone()
+        self.assertEqual(v, ("greenway", "AC", D("20.1000")))
+        self.assertEqual(self.syncer.last_report("greenway")["provider"], "greenway")
+
+    def test_sources_do_not_touch_each_other(self):
+        self.syncer.run(provider="tesla", dry_run=False)
+        self.syncer.run(provider="greenway", dry_run=False)
+        rep_t = self.syncer.run(provider="tesla", dry_run=False)
+        rep_g = self.syncer.run(provider="greenway", dry_run=False)
+        self.assertEqual(rep_t["stale"], [])  # the Greenway DC cost is not "ours without a match" for Tesla
+        self.assertEqual(rep_g["stale"], [])
+        self.assertEqual(rep_t["written"] + rep_g["written"], 0)
+        self.assertEqual(self.cost(self.dc), D("93.00"))
+        self.assertEqual(self.costs()["900053000"], D("65.36"))
+        src = dict(self.conn.execute("SELECT charging_process_id, provider FROM suc.cost_written").fetchall())
+        self.assertEqual(src[self.dc], "greenway")
+        self.assertEqual(src[self.pids["900053000"]], "tesla")
+
+    def test_manual_cost_protected_and_removable(self):
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        res = self.db.save_manual(conn, process_id=self.ac, amount=D("44.00"), grid_kwh=D("21"), note="test",
+                                  batch_id=__import__("uuid").uuid4())
+        conn.close()
+        self.assertTrue(res["written"])
+        self.assertEqual(self.cost(self.ac), D("44.00"))
+        rep = self.syncer.run(provider="greenway", dry_run=False)  # Greenway does not touch the manual cost
+        self.assertNotIn(self.ac, [r["process"] for r in rep["plan"]])
+        self.assertEqual(self.cost(self.ac), D("44.00"))
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        out = self.db.delete_manual(conn, self.ac)
+        conn.close()
+        self.assertEqual(out["restored"], 1)
+        self.assertIsNone(self.cost(self.ac))
+        n = self.conn.execute("SELECT count(*) FROM suc.invoice WHERE provider='manual'").fetchone()[0]
+        self.assertEqual(n, 0)
+        self.assertEqual(self.syncer.run(provider="greenway", dry_run=False)["written"], 1)  # not excluded
+        self.assertEqual(self.cost(self.ac), D("30.15"))
+
+    def test_manual_on_process_with_invoice_refused(self):
+        self.syncer.run(provider="tesla", dry_run=False)
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        with self.assertRaisesRegex(ValueError, "fakturę"):
+            self.db.save_manual(conn, process_id=self.pids["900053000"], amount=D("1"), grid_kwh=None, note="",
+                                batch_id=__import__("uuid").uuid4())
+        conn.close()
+
+    def test_manual_undo_from_batches_clears_dashboard(self):
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        import uuid as _u
+        b = _u.uuid4()
+        self.db.save_manual(conn, process_id=self.manual_target, amount=D("12.50"), grid_kwh=None, note="",
+                            batch_id=b)
+        self.db.undo_batch(conn, str(b))
+        conn.close()
+        self.assertIsNone(self.cost(self.manual_target))
+        n = self.conn.execute("SELECT count(*) FROM suc.v_charges WHERE charging_process_id=%s",
+                              (self.manual_target,)).fetchone()[0]
+        self.assertEqual(n, 0)
+
+    def test_manual_refused_in_dry_run(self):
+        import panel
+        self.opts["dry_run"] = True
+        app = panel.App(opts=self.opts, auth=None, api=None, usage=None, data_dir=self.tmp.name, syncer=self.syncer)
+        with self.assertRaisesRegex(ValueError, "dry_run"):
+            app.manual_save({"process": self.ac, "amount": "10"})
+        self.opts["dry_run"] = False
+        rows = app.manual_candidates({"q": "", "days": 3650})
+        self.assertIn(self.ac, [r["id"] for r in rows])
+        res = app.manual_save({"process": self.manual_target, "amount": "12,34", "kwh": "13,5"})
+        self.assertEqual(res["cost_after"], 12.34)
+
+    def _manual(self, pid, amount, kwh=None):
+        import uuid as _u
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        try:
+            return self.db.save_manual(conn, process_id=pid, amount=D(amount), grid_kwh=kwh, note="",
+                                       batch_id=_u.uuid4())
+        finally:
+            conn.close()
+
+    def _delete_manual(self, pid):
+        conn = self.db.connect(self.opts)
+        try:
+            return self.db.delete_manual(conn, pid)
+        finally:
+            conn.close()
+
+    def test_review_1_manual_then_invoice_not_double_counted(self):
+        self._manual(self.ac, "44.00")
+        rep = self.syncer.run(provider="greenway", dry_run=False)
+        v = self.conn.execute("SELECT invoice_cost, session_ids FROM suc.v_charges WHERE charging_process_id=%s",
+                              (self.ac,)).fetchone()
+        self.assertEqual(v, (D("44.00"), [f"manual-{self.ac}"]))
+        self.assertIn("gw-501", [u["session"] for u in rep["unmatched"]])
+        self.assertGreaterEqual(rep["claimed_elsewhere"], 1)  # the manual one + Supercharger processes
+
+    def test_review_2_delete_after_two_edits(self):
+        self._manual(self.manual_target, "60.00")
+        self._manual(self.manual_target, "70.00")
+        out = self._delete_manual(self.manual_target)
+        self.assertEqual(out["restored"], 2)
+        self.assertIsNone(self.cost(self.manual_target))
+        n = self.conn.execute("SELECT count(*) FROM suc.cost_written WHERE charging_process_id=%s",
+                              (self.manual_target,)).fetchone()[0]
+        self.assertEqual(n, 0)
+
+    def test_review_3_and_5_takeover_same_value(self):
+        rep = self.syncer.run(provider="tesla", dry_run=False)
+        pid = self.pids["900053000"]
+        # the allocation disappears (the process moves), the user types the same value by hand
+        self.conn.execute("UPDATE charging_processes SET start_date = start_date + interval '3 hours', "
+                          "end_date = end_date + interval '3 hours' WHERE id=%s", (pid,))
+        self.syncer.run(provider="tesla", dry_run=False)
+        self._manual(pid, "65.36")
+        conn = self.db.connect(self.opts)
+        res = self.db.undo_batch(conn, rep["batch_id"])  # undoing the old Tesla batch
+        conn.close()
+        self.assertEqual(self.cost(pid), D("65.36"))  # the manual cost survived
+        own = self.conn.execute("SELECT provider FROM suc.cost_written WHERE charging_process_id=%s", (pid,)).fetchone()
+        self.assertEqual(own[0], "manual")
+        self.assertGreaterEqual(res["skipped_changed_since"], 1)
+        out = self._delete_manual(pid)  # deleting the manual one gives the cost back to Tesla
+        self.assertEqual(out["restored"], 1)
+        own = self.conn.execute("SELECT provider, cost FROM suc.cost_written WHERE charging_process_id=%s",
+                                (pid,)).fetchone()
+        self.assertEqual(own, ("tesla", D("65.36")))
+
+    def test_review_6_greenway_skips_tesla_supercharger_process(self):
+        self.syncer.greenway = FakeGreenway([gw_session(
+            777, "2025-11-24T20:27:00+00:00", "2025-11-24T20:55:00+00:00", 34.0, 99.0, "DC")])
+        rep = self.syncer.run(provider="greenway", dry_run=False,
+                              start=utc("2025-11-01T00:00:00+00:00"), end=self.now)
+        self.assertEqual(rep["written"], 0)
+        self.assertIn("gw-777", [u["session"] for u in rep["unmatched"]])
+
+    def test_migration_from_v1(self):
+        self.syncer.run(provider="tesla", dry_run=False)
+        self.conn.execute("DROP VIEW suc.v_charges")
+        for t, c in (("invoice", "provider"), ("invoice", "charge_kind"), ("cost_written", "provider"),
+                     ("write_log", "provider")):
+            self.conn.execute(f"ALTER TABLE suc.{t} DROP COLUMN {c}")
+        rep = self.syncer.run(provider="tesla", dry_run=False)
+        self.assertEqual(rep["written"], 0)
+        self.assertEqual({r["action"] for r in rep["plan"]}, {"none"})
+        n = self.conn.execute("SELECT count(*) FROM suc.cost_written WHERE provider='tesla'").fetchone()[0]
+        self.assertEqual(n, 6)
 
 
 if __name__ == "__main__":
