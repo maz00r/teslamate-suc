@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timedelta, timezone
 
 import db
+import ha
 from api import ApiError, ChargingApi, Usage, run_probe
 from auth import AuthError, LoginRequired, TeslaAuth, normalize_domain
 from sync import summary
@@ -77,7 +78,10 @@ class App:
         if start and end and start >= end:
             raise ValueError("data „od” musi być przed „do”")
         # dry_run=False from the panel counts only when the dry_run option is also off.
-        return self.syncer.run(start=start, end=end, dry_run=body.get("dry_run", True))
+        try:
+            return self.syncer.run(start=start, end=end, dry_run=body.get("dry_run", True))
+        finally:  # sensors also after a pass from the panel, not only from the 6-hour loop
+            ha.publish(summary(self.syncer.last_report()), self.auth.status() if self.auth else {})
 
     def undo(self, batch_id: str) -> dict:
         if self.opts.get("dry_run", True):

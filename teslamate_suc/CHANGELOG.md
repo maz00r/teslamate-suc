@@ -1,5 +1,8 @@
 # Zmiany
 
+## 0.2.5
+- Przebieg uruchomiony z panelu od razu aktualizuje sensory `sensor.suc_*`.
+
 ## 0.2.4
 - `zero_is_empty` (domyślnie włączone): cudzy koszt 0,00 przy płatnej fakturze traktujemy jak pusty.
   TeslaMate wpisuje 0 dla geofence'a ze stawką 0 (np. „Tesla Ząbki”). Inne niezerowe koszty pozostają chronione.
