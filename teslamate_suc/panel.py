@@ -124,8 +124,9 @@ class App:
             kwh = None if kwh in (None, "") else Decimal(str(kwh).replace(",", ".")).quantize(Decimal("0.0001"))
         except (KeyError, ValueError, InvalidOperation):
             raise ValueError("podaj ładowanie i kwotę (np. 54,20)") from None
-        if amount < 0 or amount > Decimal("9999.99"):
-            raise ValueError("kwota poza zakresem 0–9999,99")
+        # Negative is allowed: dynamic tariffs (Pstryk) pay for energy taken at negative prices.
+        if abs(amount) > Decimal("9999.99"):
+            raise ValueError("kwota poza zakresem −9999,99–9999,99")
         if kwh is not None and (kwh < 0 or kwh > 500):
             raise ValueError("kWh poza zakresem 0–500")
         conn = self._db()

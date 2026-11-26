@@ -440,7 +440,7 @@ def save_manual(conn, *, process_id: int, amount: Decimal, grid_kwh: Decimal | N
                   start=cp["start_date"], stop=cp["end_date"], unlatch=None,
                   grid_kwh=Decimal(str(kwh)), charging_fee=amount, congestion_fee=Decimal(0), other_fee=Decimal(0),
                   total=amount, net_total=amount, currency="PLN", paid=True,
-                  pricing_types=["PAYMENT"] if amount > 0 else ["FREE"], rates=[], invoice_ids=[],
+                  pricing_types=["PAYMENT"] if amount != 0 else ["FREE"], rates=[], invoice_ids=[],
                   fees_hash=f"manual:{amount}:{kwh}", raw={"note": note, "grid_kwh_given": grid_kwh is not None},
                   provider="manual")
     upsert_invoices(conn, [inv])

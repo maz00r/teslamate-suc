@@ -477,6 +477,18 @@ class TestMultiSource(Base):
         self.assertEqual(self.syncer.run(provider="greenway", dry_run=False)["written"], 1)  # not excluded
         self.assertEqual(self.cost(self.ac), D("30.15"))
 
+    def test_manual_cost_negative(self):
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        res = self.db.save_manual(conn, process_id=self.ac, amount=D("-6.32"), grid_kwh=None, note="ujemna cena",
+                                  batch_id=__import__("uuid").uuid4())
+        conn.close()
+        self.assertTrue(res["written"])
+        self.assertEqual(self.cost(self.ac), D("-6.32"))
+        pt = self.conn.execute("SELECT pricing_types FROM suc.invoice WHERE session_id=%s",
+                               (f"manual-{self.ac}",)).fetchone()[0]
+        self.assertEqual(pt, ["PAYMENT"])
+
     def test_manual_on_process_with_invoice_refused(self):
         self.syncer.run(provider="tesla", dry_run=False)
         conn = self.db.connect(self.opts)

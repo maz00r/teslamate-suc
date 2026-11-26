@@ -1,5 +1,8 @@
 # Zmiany
 
+## 0.3.1 — ujemny koszt ręczny
+- Koszt ręczny może być ujemny (od −9999,99 do 9999,99 zł). Taryfa dynamiczna (np. Pstryk) przy ujemnych cenach płaci za pobraną energię.
+
 ## 0.3.0 — Greenway i koszty ręczne
 - **Greenway:** sesje z konta client.greenwaypolska.pl (AC i DC) dopasowywane do ładowań dowolnego auta po czasie.
   Logowanie wymaga reCAPTCHA, więc dodatek używa tokenu z Twojej sesji (ważny ~60 dni), wklejanego w panelu.
