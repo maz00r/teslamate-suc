@@ -33,6 +33,10 @@ Domyślnie działa `dry_run: true`: panel pokazuje, co zostałoby zapisane, a Te
    (te same dane co TeslaMate). W panelu kliknij „Podgląd (dry-run)” z zakresem dat obejmującym całą historię,
    przejrzyj plan, zrób backup HA, wyłącz `dry_run` i kliknij „Zapisz koszty”.
 
+**Grafana:** zaimportuj `grafana/teslamate-suc.json` (Dashboards → New → Import) do folderu TeslaMate.
+Pokazuje wydatki, cenę za kWh, straty ładowania, opłaty postojowe, Superchargery i faktury bez dopasowania.
+Zapytania są w `grafana/build_dashboard.py`.
+
 Cofnięty zapis wyklucza ładowanie z synchronizacji. Żeby je przywrócić:
 `DELETE FROM suc.cost_excluded WHERE charging_process_id = <id>;`
 

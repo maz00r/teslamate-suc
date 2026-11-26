@@ -180,6 +180,8 @@ class TestSync(Base):
                               (self.pids["900053000"],)).fetchone()
         self.assertAlmostEqual(float(v[0]), 65.36 / 34.403, places=3)
         self.assertAlmostEqual(float(v[1]), 8.0, delta=0.1)
+        fp = self.conn.execute("SELECT bool_and(full_payment) FROM suc.v_charges").fetchone()[0]
+        self.assertTrue(fp)
 
     def test_panel_cannot_force_write_while_option_on(self):
         rep = self.syncer.run(dry_run=False)
@@ -265,6 +267,9 @@ class TestSync(Base):
         cost = self.conn.execute("SELECT cost FROM charging_processes WHERE id=%s", (pid,)).fetchone()[0]
         self.assertEqual(cost, D("86.06"))
         self.assertEqual(self.costs()["free"], D("0.00"))
+        v = self.conn.execute("SELECT price_per_kwh, full_payment FROM suc.v_charges WHERE charging_process_id=%s",
+                              (self.pids["free"],)).fetchone()
+        self.assertEqual(v, (None, False))
         self.assertEqual(rep["groups"].get("N:1"), 1)
 
     def _tariff_split(self):

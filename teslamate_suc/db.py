@@ -118,7 +118,9 @@ SELECT cp.id                                    AS charging_process_id,
        sum(a.energy_kwh) - cp.charge_energy_added AS loss_kwh,
        CASE WHEN sum(a.energy_kwh) > 0
             THEN 100 * (sum(a.energy_kwh) - cp.charge_energy_added) / sum(a.energy_kwh) END AS loss_pct,
+       -- price per kWh only for sessions paid in full (a partial credit would push the price down)
        CASE WHEN sum(a.energy_kwh) > 0 AND sum(a.charging_fee) > 0
+                 AND bool_and(i.pricing_types <@ ARRAY['PAYMENT']::text[])
             THEN sum(a.charging_fee) / sum(a.energy_kwh) END AS price_per_kwh,
        min(i.site_name)                         AS site_name,
        min(i.currency)                          AS currency,
@@ -126,7 +128,8 @@ SELECT cp.id                                    AS charging_process_id,
        bool_and(i.total = 0)                    AS free,
        min(a.match_kind)                        AS match_kind,
        array_agg(i.session_id ORDER BY i.start_utc) AS session_ids,
-       (cw.charging_process_id IS NOT NULL)     AS cost_written_by_suc
+       (cw.charging_process_id IS NOT NULL)     AS cost_written_by_suc,
+       bool_and(i.pricing_types <@ ARRAY['PAYMENT']::text[]) AS full_payment
 FROM suc.allocation a
 JOIN suc.invoice i USING (session_id)
 JOIN public.charging_processes cp ON cp.id = a.charging_process_id

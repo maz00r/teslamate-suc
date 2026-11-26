@@ -1,5 +1,9 @@
 # Zmiany
 
+## 0.2.6
+- `suc.v_charges`: cena za kWh tylko z sesji opłaconych w całości (bez częściowego kredytu), nowa kolumna `full_payment`.
+- Dashboard Grafany `grafana/teslamate-suc.json`.
+
 ## 0.2.5
 - Przebieg uruchomiony z panelu od razu aktualizuje sensory `sensor.suc_*`.
 
