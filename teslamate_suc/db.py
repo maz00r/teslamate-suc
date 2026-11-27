@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -23,7 +24,7 @@ from parse import Invoice
 
 log = logging.getLogger("suc.db")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 DDL = """
 CREATE SCHEMA IF NOT EXISTS suc;
@@ -111,6 +112,18 @@ CREATE TABLE IF NOT EXISTS suc.write_log (
 CREATE INDEX IF NOT EXISTS write_log_batch ON suc.write_log (batch_id);
 ALTER TABLE suc.write_log ADD COLUMN IF NOT EXISTS provider text;
 UPDATE suc.write_log SET provider = 'tesla' WHERE provider IS NULL;  -- writes from v1 = Tesla
+
+-- Charging processes TeslaMate never closed (end_date NULL), closed by us the way TeslaMate closes them.
+-- `before`/`after` = the charging_processes columns; undo restores `before` where nothing changed since.
+CREATE TABLE IF NOT EXISTS suc.closed_process (
+    charging_process_id  integer PRIMARY KEY,
+    batch_id             uuid NOT NULL,
+    before               jsonb NOT NULL,
+    after                jsonb NOT NULL,
+    at                   timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'UTC'),
+    undone_at            timestamp
+);
+CREATE INDEX IF NOT EXISTS closed_process_batch ON suc.closed_process (batch_id);
 
 CREATE OR REPLACE VIEW suc.v_charges AS
 SELECT cp.id                                    AS charging_process_id,
@@ -373,7 +386,9 @@ def last_batches(conn, limit: int = 8) -> list[dict]:
     return conn.execute(
         "SELECT batch_id::text, min(at) AS at, count(*) AS changes, bool_or(undone_at IS NOT NULL) AS undone, "
         "coalesce(min(provider), 'tesla') AS provider "
-        "FROM suc.write_log GROUP BY batch_id ORDER BY min(at) DESC LIMIT %s", (limit,)).fetchall()
+        "FROM (SELECT batch_id, at, undone_at, provider FROM suc.write_log "
+        "      UNION ALL SELECT batch_id, at, undone_at, 'close' FROM suc.closed_process) b "
+        "GROUP BY batch_id ORDER BY min(at) DESC LIMIT %s", (limit,)).fetchall()
 
 
 def cleanup_orphans(conn) -> int:
@@ -492,3 +507,148 @@ def claimed_by_others(conn, process_ids: list[int], provider: str) -> set[int]:
         SELECT charging_process_id FROM suc.cost_written WHERE charging_process_id = ANY(%s) AND provider <> %s
         """, (process_ids, provider, process_ids, provider)).fetchall()
     return {r["id"] for r in rows}
+
+
+# --------------------------------------------------------------------------- unfinished charging processes
+# TeslaMate leaves end_date NULL when it loses a charge (restart, crash, lost connection). Such a process has
+# its charges but no energy, end date or cost, so it is missing from every statistic. We close it like
+# TeslaMate.Log.complete_charging_process (TeslaMate 2.x) does, without the cost (the cost goes through the
+# usual paths: TeslaMateAgile, sync, manual) and without recalculating the car's efficiency.
+
+CLOSE_COLS = ("start_date", "end_date", "start_ideal_range_km", "end_ideal_range_km", "start_rated_range_km",
+              "end_rated_range_km", "start_battery_level", "end_battery_level", "outside_temp_avg",
+              "charge_energy_added", "charge_energy_used", "duration_min")
+
+
+def unfinished_processes(conn, min_idle_hours: float = 6) -> list[dict]:
+    """Processes with end_date NULL whose last charge is older than min_idle_hours (a charge in progress
+    also has end_date NULL — that one must not be touched)."""
+    return conn.execute(
+        """
+        SELECT cp.id, cp.car_id, coalesce(c.name, 'Auto ' || c.id) AS car, cp.start_date,
+               coalesce(g.name, a.name, nullif(concat_ws(' ', a.road, a.house_number), ''), a.display_name) AS place,
+               a.city, s.n, s.first_at, s.last_at, s.soc0, s.soc1
+          FROM charging_processes cp
+          JOIN cars c ON c.id = cp.car_id
+          LEFT JOIN addresses a ON a.id = cp.address_id
+          LEFT JOIN geofences g ON g.id = cp.geofence_id
+          JOIN LATERAL (SELECT count(*) AS n, min(ch.date) AS first_at, max(ch.date) AS last_at,
+                               min(ch.battery_level) AS soc0, max(ch.battery_level) AS soc1
+                          FROM charges ch WHERE ch.charging_process_id = cp.id) s ON s.n > 0
+         WHERE cp.end_date IS NULL
+           AND s.last_at < (now() AT TIME ZONE 'UTC') - make_interval(secs => %s)
+         ORDER BY cp.start_date
+        """, (min_idle_hours * 3600,)).fetchall()
+
+
+def _phases(conn, process_id: int):
+    """TeslaMate determine_phases: the real number of phases (or √3 voltage correction), None = unknown."""
+    r = conn.execute(
+        "SELECT avg(charger_power * 1000.0 / nullif(charger_actual_current * charger_voltage, 0))::float AS p, "
+        "avg(charger_phases)::integer AS r, count(*) AS n FROM charges WHERE charging_process_id = %s",
+        (process_id,)).fetchone()
+    p, ph, n = r["p"], r["r"], r["n"]
+    if p is None or p <= 0 or n <= 15:
+        return None
+    rp = math.floor(p + 0.5)  # Elixir round/1: half away from zero
+    if ph == rp:
+        return ph
+    if ph == 3 and abs(p / math.sqrt(ph) - 1) <= 0.1:
+        return math.sqrt(ph)
+    if abs(rp - p) <= 0.3:
+        return rp
+    return None
+
+
+def close_stats(conn, process_id: int) -> dict | None:
+    """The values TeslaMate would write when completing the process (without cost)."""
+    st = conn.execute(
+        """
+        SELECT first_value(date) OVER w AS start_date, last_value(date) OVER w AS end_date,
+               first_value(ideal_battery_range_km) OVER w AS start_ideal_range_km,
+               last_value(ideal_battery_range_km) OVER w AS end_ideal_range_km,
+               first_value(rated_battery_range_km) OVER w AS start_rated_range_km,
+               last_value(rated_battery_range_km) OVER w AS end_rated_range_km,
+               first_value(battery_level) OVER w AS start_battery_level,
+               last_value(battery_level) OVER w AS end_battery_level,
+               round((avg(outside_temp) OVER w)::numeric, 1) AS outside_temp_avg,
+               coalesce(nullif(last_value(charge_energy_added) OVER w, 0), max(charge_energy_added) OVER w)
+                 - first_value(charge_energy_added) OVER w AS charge_energy_added,
+               (extract(epoch FROM last_value(date) OVER w - first_value(date) OVER w) / 60)::integer AS duration_min
+          FROM charges WHERE charging_process_id = %s
+        WINDOW w AS (ORDER BY date RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+         LIMIT 1
+        """, (process_id,)).fetchone()
+    if st is None:
+        return None
+    st = dict(st)
+    if st["charge_energy_added"] is not None and st["charge_energy_added"] < 0:
+        st["charge_energy_added"] = None
+    used = conn.execute(
+        """
+        SELECT round(sum(e)::numeric, 2) AS kwh FROM (
+          SELECT CASE WHEN charger_phases IS NULL THEN charger_power
+                      ELSE charger_actual_current * charger_voltage * %s::float / 1000.0 END
+                 * extract(epoch FROM date - lag(date) OVER (ORDER BY date)) / 3600 AS e
+            FROM charges WHERE charging_process_id = %s) x
+         WHERE e >= 0
+        """, (_phases(conn, process_id), process_id)).fetchone()["kwh"]
+    st["charge_energy_used"] = used
+    return st
+
+
+def _jsonable(d: dict) -> dict:
+    return {k: (v.isoformat() if isinstance(v, datetime) else str(v) if isinstance(v, Decimal) else v)
+            for k, v in d.items()}
+
+
+def close_processes(conn, process_ids: list[int], *, batch_id: uuid.UUID, min_idle_hours: float = 6) -> dict:
+    """Closes the given unfinished processes; one process = one transaction. Skips a process that is
+    no longer unfinished or has a charge newer than min_idle_hours."""
+    allowed = {r["id"] for r in unfinished_processes(conn, min_idle_hours)}
+    closed, skipped = [], []
+    cols = ", ".join(CLOSE_COLS)
+    for pid in process_ids:
+        if pid not in allowed:
+            skipped.append(pid)
+            continue
+        with conn.transaction():
+            before = conn.execute(f"SELECT {cols} FROM charging_processes WHERE id = %s AND end_date IS NULL "
+                                  "FOR UPDATE", (pid,)).fetchone()
+            st = close_stats(conn, pid) if before else None
+            if not st or st["end_date"] is None:
+                skipped.append(pid)
+                continue
+            conn.execute("INSERT INTO suc.closed_process (charging_process_id, batch_id, before, after) "
+                         "VALUES (%s, %s, %s, %s) ON CONFLICT (charging_process_id) DO UPDATE SET "
+                         "batch_id = excluded.batch_id, before = excluded.before, after = excluded.after, "
+                         "at = now() AT TIME ZONE 'UTC', undone_at = NULL",
+                         (pid, batch_id, json.dumps(_jsonable(dict(before))), json.dumps(_jsonable(st))))
+            sets = ", ".join(f"{c} = %s" for c in CLOSE_COLS)
+            cur = conn.execute(f"UPDATE charging_processes SET {sets} WHERE id = %s AND end_date IS NULL",
+                               [st[c] for c in CLOSE_COLS] + [pid])
+            if cur.rowcount != 1:
+                raise RuntimeError(f"UPDATE charging_processes {pid}: rowcount {cur.rowcount}")
+        closed.append({"process": pid, **_jsonable({k: st[k] for k in
+                       ("start_date", "end_date", "charge_energy_added", "charge_energy_used",
+                        "start_battery_level", "end_battery_level", "duration_min")})})
+    return {"batch_id": str(batch_id), "closed": closed, "skipped": skipped}
+
+
+def undo_close(conn, batch_id: str) -> dict:
+    """Reopens the processes of a close batch, only where end_date is still what we wrote."""
+    restored, skipped = 0, 0
+    with conn.transaction():
+        rows = conn.execute("SELECT charging_process_id AS pid, before, after FROM suc.closed_process "
+                            "WHERE batch_id = %s AND undone_at IS NULL", (batch_id,)).fetchall()
+        for r in rows:
+            sets = ", ".join(f"{c} = %s" for c in CLOSE_COLS)
+            cur = conn.execute(f"UPDATE charging_processes SET {sets} WHERE id = %s AND end_date = %s::timestamp",
+                               [r["before"].get(c) for c in CLOSE_COLS] + [r["pid"], r["after"]["end_date"]])
+            if cur.rowcount != 1:
+                skipped += 1
+                continue
+            restored += 1
+            conn.execute("UPDATE suc.closed_process SET undone_at = now() AT TIME ZONE 'UTC' "
+                         "WHERE charging_process_id = %s", (r["pid"],))
+    return {"batch_id": batch_id, "restored": restored, "skipped_changed_since": skipped}

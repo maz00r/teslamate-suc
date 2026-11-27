@@ -1,5 +1,10 @@
 # Zmiany
 
+## 0.4.0 — zamykanie niezamkniętych ładowań
+- Nowa sekcja panelu „Niezamknięte ładowania”: ładowania, którym TeslaMate nie zapisał końca (brak energii, daty końca i kosztu), można zamknąć tak, jak robi to TeslaMate (`complete_charging_process`): energia dodana i pobrana z sieci, poziomy baterii, zasięg, czas, temperatura.
+- Koszt nie jest liczony przy zamykaniu, uzupełnia go TeslaMateAgile, synchronizacja albo koszt ręczny. Sprawność auta nie jest przeliczana.
+- Pomijane są ładowania z danymi z ostatnich 6 h (mogą jeszcze trwać). Zamknięcie trafia do „Zapisy i cofanie” i da się je cofnąć.
+
 ## 0.3.1 — ujemny koszt ręczny
 - Koszt ręczny może być ujemny (od −9999,99 do 9999,99 zł). Taryfa dynamiczna (np. Pstryk) przy ujemnych cenach płaci za pobraną energię.
 

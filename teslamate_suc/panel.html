@@ -79,6 +79,12 @@ kliknij zakładkę i wklej token tutaj.</p>
 </div>
 </section>
 
+<section><h2>Niezamknięte ładowania</h2>
+<p class="muted">TeslaMate czasem gubi koniec ładowania (restart, brak połączenia) — takie ładowanie nie ma energii ani kosztu i nie wchodzi do statystyk. Zamknięcie liczy je tak jak TeslaMate (bez kosztu: ten uzupełni TeslaMateAgile, synchronizacja albo koszt ręczny). Pokazuje tylko ładowania bez nowych danych od 6 h. Można cofnąć w „Zapisy i cofanie”.</p>
+<button class="sec" id="bUFind">Pokaż</button> <button id="bUClose" hidden>Zamknij zaznaczone</button>
+<div id="uList" class="muted"></div>
+</section>
+
 <section><h2>Zużycie API</h2><div id="usage"></div></section>
 <div id="msg" class="bad"></div>
 </main>
@@ -181,7 +187,7 @@ call('GET','api/report').then(renderReport).catch(()=>{});
 $('bGwSave').onclick = e => act(e.target, async () => { await call('POST', 'api/greenway/token', {token: $('gwToken').value}); $('gwToken').value = ''; });
 $('bGwClear').onclick = e => act(e.target, () => confirm('Usunąć token Greenway?') ? call('POST', 'api/greenway/token', {clear: true}) : null);
 let mSel = null;
-const SRC = {tesla: 'Tesla', greenway: 'Greenway', manual: 'ręczny'};
+const SRC = {tesla: 'Tesla', greenway: 'Greenway', manual: 'ręczny', close: 'zamknięcie ładowań'};
 $('bMFind').onclick = e => act(e.target, async () => {
   const rows = await call('POST', 'api/manual/candidates', {q: $('mQ').value, days: 90});
   $('mList').innerHTML = rows.length ? '<pre>' + rows.map(r => `<a href="#" data-m="${r.id}">#${r.id}</a>  ${esc(r.start_date.slice(0,16).replace('T',' '))}  ${esc(r.car)}  ${esc((r.place||'?') + (r.city ? ', ' + r.city : ''))}  ${r.kwh ?? '—'} kWh ${r.dc ? 'DC' : 'AC'}  koszt: ${money(r.cost)}${r.cost_source ? ' (' + SRC[r.cost_source] + ')' : ''}${r.invoice_source ? ' · faktura: ' + esc(r.invoice_source) : ''}`).join('\n') + '</pre>' : 'Nic nie znaleziono.';
@@ -200,6 +206,18 @@ $('bMSave').onclick = e => act(e.target, async () => {
 $('bMDel').onclick = e => act(e.target, async () => {
   if (!confirm('Usunąć koszt ręczny i przywrócić poprzednią wartość?')) return;
   const r = await call('POST', 'api/manual/delete', {process: mSel}); alert(`Przywrócono: ${r.restored}`); $('mForm').hidden = true; loadBatches();
+});
+$('bUFind').onclick = e => act(e.target, async () => {
+  const rows = await call('POST', 'api/unfinished', {});
+  $('uList').innerHTML = rows.length ? '<pre>' + rows.map(r => `<label><input type="checkbox" data-u="${r.id}" checked> #${r.id}  ${esc(r.first_at.slice(0,16).replace('T',' '))}–${esc(r.last_at.slice(11,16))}  ${esc(r.car)}  ${esc((r.place||'?') + (r.city ? ', ' + r.city : ''))}  ${r.soc[0] ?? '?'}→${r.soc[1] ?? '?'}%  ${r.kwh ?? '—'} kWh (z sieci ${r.kwh_used ?? '—'})</label>`).join('\n') + '</pre>' : 'Brak niezamkniętych ładowań.';
+  $('bUClose').hidden = !rows.length;
+});
+$('bUClose').onclick = e => act(e.target, async () => {
+  if (window._dry) throw new Error('Wyłącz dry_run w konfiguracji dodatku, żeby zamykać ładowania.');
+  const ids = [...document.querySelectorAll('[data-u]:checked')].map(x => +x.dataset.u);
+  if (!ids.length || !confirm(`Zamknąć ${ids.length} ładowań w TeslaMate?`)) return;
+  const r = await call('POST', 'api/unfinished/close', {processes: ids});
+  alert(`Zamknięto ${r.closed.length}, pominięto ${r.skipped.length}.`); $('bUFind').click(); loadBatches();
 });
 loadBatches();
 </script></body></html>

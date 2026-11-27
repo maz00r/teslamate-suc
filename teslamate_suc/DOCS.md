@@ -39,6 +39,8 @@ automatu włącz `greenway_enabled`. Token wygasa po ~60 dniach, HA przypomni o 
 
 **Koszt ręczny:** sekcja „Koszt ręczny” w panelu: wyszukaj ładowanie, wpisz kwotę (i ewentualnie kWh z licznika).
 
+**Niezamknięte ładowania:** sekcja w panelu pokazuje ładowania bez zapisanego końca i zamyka je tak jak TeslaMate (bez kosztu). Cofanie w „Zapisy i cofanie”.
+
 **Grafana:** zaimportuj `grafana/teslamate-suc.json` (Dashboards → New → Import) do folderu TeslaMate.
 Pokazuje wydatki, cenę za kWh, straty ładowania, opłaty postojowe, Superchargery i faktury bez dopasowania.
 Zapytania są w `grafana/build_dashboard.py`.

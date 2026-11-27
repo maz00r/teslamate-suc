@@ -145,6 +145,38 @@ class App:
         finally:
             conn.close()
 
+    # ---- unfinished charging processes
+
+    def unfinished(self) -> list:
+        conn = self._db()
+        try:
+            rows = db.unfinished_processes(conn)
+            out = []
+            for r in rows:
+                st = db.close_stats(conn, r["id"]) or {}
+                out.append({"id": r["id"], "car": r["car"], "place": r["place"], "city": r["city"], "n": r["n"],
+                            "first_at": r["first_at"].isoformat(), "last_at": r["last_at"].isoformat(),
+                            "soc": [st.get("start_battery_level"), st.get("end_battery_level")],
+                            "kwh": None if st.get("charge_energy_added") is None else float(st["charge_energy_added"]),
+                            "kwh_used": None if st.get("charge_energy_used") is None else float(st["charge_energy_used"])})
+            return out
+        finally:
+            conn.close()
+
+    def close_unfinished(self, body: dict) -> dict:
+        self._require_write("zamykanie ładowań")
+        try:
+            ids = [int(x) for x in body.get("processes") or []]
+        except (TypeError, ValueError):
+            raise ValueError("podaj listę ładowań") from None
+        if not ids:
+            raise ValueError("podaj listę ładowań")
+        conn = self._db()
+        try:
+            return db.close_processes(conn, ids, batch_id=uuid.uuid4())
+        finally:
+            conn.close()
+
     def run_sync(self, body: dict) -> dict:
         if not self.syncer:
             raise ValueError("synchronizacja niedostępna")
@@ -175,7 +207,12 @@ class App:
             raise ValueError("cofanie zmienia TeslaMate — wyłącz dry_run w konfiguracji, żeby cofnąć zapis")
         conn = db.connect(self.opts)
         try:
-            return db.undo_batch(conn, batch_id)
+            db.migrate(conn)
+            res = db.undo_batch(conn, batch_id)
+            c = db.undo_close(conn, batch_id)
+            res["restored"] += c["restored"]
+            res["skipped_changed_since"] += c["skipped_changed_since"]
+            return res
         finally:
             conn.close()
 
@@ -291,6 +328,10 @@ def make_handler(app: App, allowed_peers=INGRESS_PEERS):
                 return self._run(lambda: app.manual_save(self._body()))
             if path == "/api/manual/delete":
                 return self._run(lambda: app.manual_delete(self._body()))
+            if path == "/api/unfinished":
+                return self._run(app.unfinished)
+            if path == "/api/unfinished/close":
+                return self._run(lambda: app.close_unfinished(self._body()))
             if path == "/api/undo":
                 return self._run(lambda: app.undo(str(self._body().get("batch_id", ""))))
             if path == "/api/probe":

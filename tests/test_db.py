@@ -49,6 +49,8 @@ CREATE TABLE public.charges (
     id serial PRIMARY KEY, date timestamp NOT NULL, charge_energy_added numeric(8,2) NOT NULL,
     charger_power smallint NOT NULL, fast_charger_present boolean, conn_charge_cable varchar(255),
     fast_charger_brand varchar(255), fast_charger_type varchar(255), ideal_battery_range_km numeric(6,2) NOT NULL,
+    battery_level smallint, rated_battery_range_km numeric(6,2), outside_temp numeric(4,1),
+    charger_phases smallint, charger_actual_current smallint, charger_voltage smallint,
     charging_process_id integer NOT NULL REFERENCES charging_processes(id) ON DELETE CASCADE);
 CREATE TABLE public.addresses (
     id serial PRIMARY KEY, display_name varchar(512), name varchar(255), house_number varchar(255),
@@ -600,6 +602,71 @@ class TestMultiSource(Base):
         self.assertEqual({r["action"] for r in rep["plan"]}, {"none"})
         n = self.conn.execute("SELECT count(*) FROM suc.cost_written WHERE provider='tesla'").fetchone()[0]
         self.assertEqual(n, 6)
+
+
+
+class TestCloseUnfinished(Base):
+    """Processes TeslaMate never closed: closed like TeslaMate.Log.complete_charging_process, undo restores."""
+
+    def unfinished(self, start, n=20, kwh0=0.0, step_kwh=0.9, soc0=40, phases=3, minutes=5, temp=10.0):
+        pid = self.conn.execute("INSERT INTO charging_processes (start_date, car_id) VALUES (%s, 1) RETURNING id",
+                                (start,)).fetchone()[0]
+        for i in range(n):
+            self.conn.execute(
+                "INSERT INTO charges (date, charge_energy_added, charger_power, fast_charger_present, "
+                "ideal_battery_range_km, rated_battery_range_km, battery_level, outside_temp, charger_phases, "
+                "charger_actual_current, charger_voltage, charging_process_id) "
+                "VALUES (%s,%s,11,false,%s,%s,%s,%s,%s,16,230,%s)",
+                (start + timedelta(minutes=minutes * i), kwh0 + step_kwh * i, 200 + i, 210 + i, soc0 + i,
+                 temp + (i % 2), phases, pid))
+        return pid
+
+    def row(self, pid):
+        return self.conn.execute("SELECT end_date, charge_energy_added, charge_energy_used, start_battery_level, "
+                                 "end_battery_level, duration_min, outside_temp_avg, start_ideal_range_km, "
+                                 "end_rated_range_km FROM charging_processes WHERE id=%s", (pid,)).fetchone()
+
+    def test_close_and_undo(self):
+        import uuid as _u
+        start = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0) - timedelta(days=2)
+        old = self.unfinished(start)
+        cont = self.unfinished(start + timedelta(hours=3), kwh0=30.0)  # car counter not reset: last - first
+        fresh = self.unfinished(datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=60), n=5)
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        ids = [r["id"] for r in self.db.unfinished_processes(conn)]
+        self.assertEqual(ids, [old, cont])  # a charge from an hour ago may still be running
+        b = _u.uuid4()
+        res = self.db.close_processes(conn, [old, cont, fresh], batch_id=b)
+        self.assertEqual([c["process"] for c in res["closed"]], [old, cont])
+        self.assertEqual(res["skipped"], [fresh])
+        end, added, used, soc0, soc1, dur, temp, ideal0, rated1 = self.row(old)
+        self.assertEqual(end, start + timedelta(minutes=95))
+        self.assertEqual(added, D("17.10"))
+        # 3 phases × 16 A × 230 V = 11.04 kW × 19 intervals × 5 min
+        self.assertEqual(used, D("17.48"))
+        self.assertEqual((soc0, soc1, dur, temp, ideal0, rated1), (40, 59, 95, D("10.5"), D("200"), D("229")))
+        self.assertEqual(self.row(cont)[1], D("17.10"))
+        self.assertIsNone(self.row(fresh)[0])
+        self.assertEqual(self.db.close_processes(conn, [old], batch_id=_u.uuid4())["skipped"], [old])
+        self.assertIn(str(b), [x["batch_id"] for x in self.db.last_batches(conn)])
+        u = self.db.undo_close(conn, str(b))
+        self.assertEqual(u["restored"], 2)
+        self.assertEqual(self.row(old)[:3], (None, None, None))
+        self.assertEqual(self.conn.execute("SELECT start_date FROM charging_processes WHERE id=%s",
+                                           (old,)).fetchone()[0], start)
+        conn.close()
+
+    def test_phase_unknown_gives_no_energy_used(self):
+        import uuid as _u
+        start = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0) - timedelta(days=1)
+        pid = self.unfinished(start, n=10)  # n <= 15: TeslaMate does not trust the phases → NULL kWh used
+        conn = self.db.connect(self.opts)
+        self.db.migrate(conn)
+        self.db.close_processes(conn, [pid], batch_id=_u.uuid4())
+        conn.close()
+        self.assertIsNone(self.row(pid)[2])
+        self.assertEqual(self.row(pid)[1], D("8.10"))
 
 
 if __name__ == "__main__":
